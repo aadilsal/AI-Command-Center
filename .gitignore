@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Secrets & local config — never commit
+.env
+.env.*
+!.env.example
+
+# Build output
+.next/
+out/
+dist/
+
+# Convex local state
+.convex/
+
+# OS / editor
+.DS_Store
+*.log
+.vscode/
