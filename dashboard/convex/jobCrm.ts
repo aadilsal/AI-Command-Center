@@ -69,3 +69,19 @@ export const sanitizeStored = internalMutation({
     return { descriptionsCleaned: cleaned, kitsCleared };
   },
 });
+
+// Archive every not-yet-acted-on job from a source you no longer want
+// Run: npx convex run jobCrm:archiveSource '{"source":"RemoteOK"}'
+export const archiveSource = internalMutation({
+  args: { source: v.string() },
+  handler: async (ctx, { source }) => {
+    let archived = 0;
+    for (const job of await ctx.db.query("jobs").collect()) {
+      if (job.source === source && job.status === "Saved") {
+        await ctx.db.patch(job._id, { status: "Archived", statusChangedAt: Date.now() });
+        archived++;
+      }
+    }
+    return { archived };
+  },
+});

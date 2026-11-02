@@ -1,5 +1,5 @@
 // All job board fetchers. Each converts its board's format into NormalizedJob.
-// To add a new board: write a fetcher and add it to SOURCES at the bottom.
+// Only boards where applying is free. To add a board: write a fetcher, add it to SOURCES.
 
 export type NormalizedJob = {
   url: string;
@@ -19,33 +19,56 @@ export type SourceResult = {
 };
 
 const USER_AGENT = "AadilCommandCenter/1.0 (personal job search)";
+const REQUEST_TIMEOUT_MS = 25000;
 
-async function getJson(url: string): Promise<any> {
-  const res = await fetch(url, {
-    headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function fetchText(url: string, accept = "application/json"): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": USER_AGENT, Accept: accept },
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.text();
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") throw new Error("timed out");
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const getJson = async (url: string): Promise<any> => JSON.parse(await fetchText(url));
+
+function decodeEntities(s: string): string {
+  return s
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&#x27;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&");
 }
 
 function stripHtml(html: string | undefined | null): string {
-  return (html ?? "")
+  return decodeEntities(html ?? "")
     .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 /**
  * Removes anti-bot "application traps" some boards hide in descriptions
- * (e.g. RemoteOK: "Please mention the word X and tag Y when applying").
- * The tag identifies the scraper, so it must never reach an application.
+ * ("Please mention the word X and tag Y when applying"). Never let these reach an application.
  */
 export function stripApplyTraps(text: string): string {
   return text
     .replace(/please mention the word[\s\S]*?(spam applicants?|when applying)[^.]*\.?/gi, " ")
-    .replace(/\(?#?\b[A-Za-z0-9+/]{12,}={1,2}\)?/g, " ") // base64-like tags
+    .replace(/\(?#?\b[A-Za-z0-9+/]{12,}={1,2}\)?/g, " ")
     .replace(/#[A-Za-z0-9]{10,}/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -64,9 +87,7 @@ function toMs(value: unknown): number | undefined {
 
 // ---------- Remotive ----------
 async function fromRemotive(): Promise<NormalizedJob[]> {
-  const data = await getJson(
-    "https://remotive.com/api/remote-jobs?category=software-dev"
-  );
+  const data = await getJson("https://remotive.com/api/remote-jobs?category=software-dev");
   return (data.jobs ?? []).map((j: any) => ({
     url: j.url,
     title: j.title,
@@ -96,26 +117,6 @@ async function fromArbeitnow(): Promise<NormalizedJob[]> {
     }));
 }
 
-// ---------- RemoteOK (first array item is a legal notice) ----------
-async function fromRemoteOK(): Promise<NormalizedJob[]> {
-  const data = await getJson("https://remoteok.com/api");
-  return (Array.isArray(data) ? data : [])
-    .filter((j: any) => j && j.position && j.url)
-    .map((j: any) => ({
-      url: j.url,
-      title: j.position,
-      company: j.company || "Unknown",
-      location: j.location || "Worldwide",
-      salary:
-        j.salary_min && j.salary_max
-          ? `$${j.salary_min} - $${j.salary_max}`
-          : "",
-      description: cleanDescription(j.description),
-      source: "RemoteOK",
-      postedAt: toMs(j.epoch ?? j.date),
-    }));
-}
-
 // ---------- Jobicy ----------
 async function fromJobicy(): Promise<NormalizedJob[]> {
   const data = await getJson("https://jobicy.com/api/v2/remote-jobs?count=50");
@@ -134,12 +135,98 @@ async function fromJobicy(): Promise<NormalizedJob[]> {
   }));
 }
 
+// ---------- Himalayas (free public API; credit Himalayas when displaying) ----------
+const HIMALAYAS_PAGES = 5; // 20 jobs per page
+const OPEN_TO_PAKISTAN = /pakistan|asia|worldwide|anywhere|global/i;
+
+async function fromHimalayas(): Promise<NormalizedJob[]> {
+  const jobs: NormalizedJob[] = [];
+  for (let page = 0; page < HIMALAYAS_PAGES; page++) {
+    const data = await getJson(`https://himalayas.app/jobs/api?limit=20&offset=${page * 20}`);
+    const list: any[] = data.jobs ?? [];
+
+    for (const j of list) {
+      const restrictions: string[] = Array.isArray(j.locationRestrictions)
+        ? j.locationRestrictions.map((r: any) => (typeof r === "string" ? r : r?.name ?? "")).filter(Boolean)
+        : [];
+
+      // Skip jobs that explicitly exclude Pakistan, before any LLM tokens are spent
+      if (restrictions.length && !restrictions.some((r) => OPEN_TO_PAKISTAN.test(r))) continue;
+
+      const url = j.guid || j.applicationLink;
+      if (!url || !j.title) continue;
+
+      jobs.push({
+        url,
+        title: j.title,
+        company: j.companyName || "Unknown",
+        location: restrictions.length ? restrictions.join(", ") : "Worldwide",
+        salary:
+          j.minSalary && j.maxSalary
+            ? `${j.currency ?? "USD"} ${j.minSalary} - ${j.maxSalary}`
+            : "",
+        description: cleanDescription(j.description || j.excerpt),
+        source: "Himalayas",
+        postedAt: toMs(j.pubDate),
+      });
+    }
+
+    if (list.length < 20) break;
+    await sleep(1000); // keep usage reasonable
+  }
+  return jobs;
+}
+
+// ---------- We Work Remotely (free RSS feeds) ----------
+const WWR_FEEDS = [
+  "https://weworkremotely.com/categories/remote-full-stack-programming-jobs.rss",
+  "https://weworkremotely.com/categories/remote-back-end-programming-jobs.rss",
+  "https://weworkremotely.com/categories/remote-front-end-programming-jobs.rss",
+];
+
+function rssTag(item: string, tag: string): string {
+  const m = item.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i"));
+  return m ? decodeEntities(m[1]).trim() : "";
+}
+
+async function fromWeWorkRemotely(): Promise<NormalizedJob[]> {
+  const jobs: NormalizedJob[] = [];
+  for (const feed of WWR_FEEDS) {
+    const xml = await fetchText(feed, "application/rss+xml, application/xml, text/xml");
+    const items = xml.match(/<item>[\s\S]*?<\/item>/gi) ?? [];
+
+    for (const item of items) {
+      // Title format: "Company: Job Title"
+      const rawTitle = rssTag(item, "title");
+      const sep = rawTitle.indexOf(":");
+      const company = sep > 0 ? rawTitle.slice(0, sep).trim() : "Unknown";
+      const title = sep > 0 ? rawTitle.slice(sep + 1).trim() : rawTitle;
+      const url = rssTag(item, "link") || rssTag(item, "guid");
+      if (!url || !title) continue;
+
+      jobs.push({
+        url,
+        title,
+        company,
+        location: rssTag(item, "region") || "Unspecified",
+        salary: "",
+        description: cleanDescription(rssTag(item, "description")),
+        source: "We Work Remotely",
+        postedAt: toMs(rssTag(item, "pubDate")),
+      });
+    }
+    await sleep(800);
+  }
+  return jobs;
+}
+
 // ---------- Registry ----------
 const SOURCES: { name: string; fetch: () => Promise<NormalizedJob[]> }[] = [
   { name: "Remotive", fetch: fromRemotive },
   { name: "Arbeitnow", fetch: fromArbeitnow },
-  { name: "RemoteOK", fetch: fromRemoteOK },
   { name: "Jobicy", fetch: fromJobicy },
+  { name: "Himalayas", fetch: fromHimalayas },
+  { name: "We Work Remotely", fetch: fromWeWorkRemotely },
 ];
 
 // Fetch every source in parallel; one failing never breaks the others.
