@@ -1,5 +1,5 @@
 // All job board fetchers. Each converts its board's format into NormalizedJob.
-// Only boards where applying is free. To add a board: write a fetcher, add it to SOURCES.
+// Only sources where browsing AND applying are free. To add/remove one, edit SOURCES at the bottom.
 
 export type NormalizedJob = {
   url: string;
@@ -46,10 +46,11 @@ const getJson = async (url: string): Promise<any> => JSON.parse(await fetchText(
 function decodeEntities(s: string): string {
   return s
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/&#x2F;/g, "/")
+    .replace(/&#x27;|&#39;/g, "'")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
-    .replace(/&#39;|&#x27;/g, "'")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&");
 }
@@ -167,7 +168,6 @@ async function fromHimalayas(): Promise<NormalizedJob[]> {
   const found = new Map<string, NormalizedJob>();
   let searchWorked = false;
 
-  // Keyword search: engineering roles only
   for (const q of HIMALAYAS_QUERIES) {
     try {
       const enc = encodeURIComponent(q);
@@ -180,10 +180,9 @@ async function fromHimalayas(): Promise<NormalizedJob[]> {
     } catch {
       /* try the next keyword */
     }
-    await sleep(1000); // keep usage reasonable
+    await sleep(1000);
   }
 
-  // Fallback: general feed, if search is unavailable
   if (!searchWorked) {
     for (let page = 0; page < HIMALAYAS_BROWSE_PAGES; page++) {
       const data = await getJson(`https://himalayas.app/jobs/api?limit=20&offset=${page * 20}`);
@@ -200,46 +199,47 @@ async function fromHimalayas(): Promise<NormalizedJob[]> {
   return [...found.values()];
 }
 
-// ---------- We Work Remotely (free RSS feeds) ----------
-const WWR_FEEDS = [
-  "https://weworkremotely.com/categories/remote-full-stack-programming-jobs.rss",
-  "https://weworkremotely.com/categories/remote-back-end-programming-jobs.rss",
-  "https://weworkremotely.com/categories/remote-front-end-programming-jobs.rss",
-];
+// ---------- Hacker News "Who is hiring?" (free; companies post directly) ----------
+// Post format is usually: "Company | Role | Location | REMOTE | ..." on the first line.
+const ALGOLIA = "https://hn.algolia.com/api/v1";
+const ROLE_WORDS = /engineer|developer|stack|backend|back-end|frontend|front-end|software|programmer|swe\b/i;
 
-function rssTag(item: string, tag: string): string {
-  const m = item.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i"));
-  return m ? decodeEntities(m[1]).trim() : "";
-}
+async function fromHNWhoIsHiring(): Promise<NormalizedJob[]> {
+  const search = await getJson(`${ALGOLIA}/search_by_date?tags=story,author_whoishiring&hitsPerPage=6`);
+  const thread = (search.hits ?? []).find((h: any) => /who is hiring/i.test(h.title ?? ""));
+  if (!thread) throw new Error("No 'Who is hiring' thread found");
 
-async function fromWeWorkRemotely(): Promise<NormalizedJob[]> {
+  const item = await getJson(`${ALGOLIA}/items/${thread.objectID}`);
   const jobs: NormalizedJob[] = [];
-  for (const feed of WWR_FEEDS) {
-    const xml = await fetchText(feed, "application/rss+xml, application/xml, text/xml");
-    const items = xml.match(/<item>[\s\S]*?<\/item>/gi) ?? [];
 
-    for (const item of items) {
-      // Title format: "Company: Job Title"
-      const rawTitle = rssTag(item, "title");
-      const sep = rawTitle.indexOf(":");
-      const company = sep > 0 ? rawTitle.slice(0, sep).trim() : "Unknown";
-      const title = sep > 0 ? rawTitle.slice(sep + 1).trim() : rawTitle;
-      const url = rssTag(item, "link") || rssTag(item, "guid");
-      if (!url || !title) continue;
+  for (const c of item.children ?? []) {
+    if (!c?.text || !c.author) continue;
 
-      jobs.push({
-        url,
-        title,
-        company,
-        location: rssTag(item, "region") || "Unspecified",
-        salary: "",
-        description: cleanDescription(rssTag(item, "description")),
-        source: "We Work Remotely",
-        postedAt: toMs(rssTag(item, "pubDate")),
-      });
-    }
-    await sleep(800);
+    const firstLine = decodeEntities(c.text.split(/<p>/i)[0])
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!/\bremote\b/i.test(firstLine)) continue; // remote roles only
+
+    const parts = firstLine.split("|").map((p) => p.trim()).filter(Boolean);
+    if (parts.length < 2) continue;
+
+    const company = parts[0].slice(0, 80);
+    const title = (parts.slice(1).find((p) => ROLE_WORDS.test(p)) ?? parts[1]).slice(0, 120);
+    const location = parts.filter((p) => /remote|onsite|on-site|hybrid|us|eu|uk|worldwide|anywhere/i.test(p)).join(", ") || "Remote";
+
+    jobs.push({
+      url: `https://news.ycombinator.com/item?id=${c.id}`,
+      title,
+      company,
+      location,
+      salary: "",
+      description: cleanDescription(c.text),
+      source: "HN Who is hiring",
+      postedAt: c.created_at_i ? c.created_at_i * 1000 : undefined,
+    });
   }
+
   return jobs;
 }
 
@@ -249,7 +249,7 @@ const SOURCES: { name: string; fetch: () => Promise<NormalizedJob[]> }[] = [
   { name: "Arbeitnow", fetch: fromArbeitnow },
   { name: "Jobicy", fetch: fromJobicy },
   { name: "Himalayas", fetch: fromHimalayas },
-  { name: "We Work Remotely", fetch: fromWeWorkRemotely },
+  { name: "HN Who is hiring", fetch: fromHNWhoIsHiring },
 ];
 
 // Fetch every source in parallel; one failing never breaks the others.
