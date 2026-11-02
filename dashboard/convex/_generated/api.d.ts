@@ -9,6 +9,7 @@
  */
 
 import type * as agentStatus from "../agentStatus.js";
+import type * as applicationKit from "../applicationKit.js";
 import type * as briefingAgent from "../briefingAgent.js";
 import type * as careerAgent from "../careerAgent.js";
 import type * as cleanup from "../cleanup.js";
@@ -27,6 +28,7 @@ import type * as llm from "../llm.js";
 import type * as osm from "../osm.js";
 import type * as outreach from "../outreach.js";
 import type * as profile from "../profile.js";
+import type * as resumes from "../resumes.js";
 import type * as seed from "../seed.js";
 import type * as techversaProfile from "../techversaProfile.js";
 
@@ -38,6 +40,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   agentStatus: typeof agentStatus;
+  applicationKit: typeof applicationKit;
   briefingAgent: typeof briefingAgent;
   careerAgent: typeof careerAgent;
   cleanup: typeof cleanup;
@@ -56,6 +59,7 @@ declare const fullApi: ApiFromModules<{
   osm: typeof osm;
   outreach: typeof outreach;
   profile: typeof profile;
+  resumes: typeof resumes;
   seed: typeof seed;
   techversaProfile: typeof techversaProfile;
 }>;

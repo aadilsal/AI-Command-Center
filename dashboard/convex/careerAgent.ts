@@ -97,7 +97,18 @@ export const run = internalAction({
       const fresh = relevant.filter((j) => newSet.has(j.url));
       const toScore = fresh.slice(0, MAX_JOBS_PER_RUN);
 
-      // 5. Score and save
+      // 5. Backfill descriptions on jobs we already have (no LLM, no tokens)
+      const repeats = relevant.filter((j) => !newSet.has(j.url) && j.description);
+      const backfilled = repeats.length
+        ? await ctx.runMutation(internal.careerAgent.backfillDescriptions, {
+            items: repeats.map((j) => ({
+              url: j.url,
+              description: j.description.slice(0, DESCRIPTION_CHARS),
+            })),
+          })
+        : 0;
+
+      // 6. Score and save
       let saved = 0;
       let retries = 0;
       let lastFailure: string | null = null;
@@ -114,6 +125,7 @@ export const run = internalAction({
             url: job.url,
             location: job.location,
             source: job.source,
+            description: job.description.slice(0, DESCRIPTION_CHARS),
             dedupeKey: jobKey(job.title, job.company),
             ...analysis,
           });
@@ -124,7 +136,7 @@ export const run = internalAction({
         }
       }
 
-      // 6. Report status to the dashboard
+      // 7. Report status to the dashboard
       const failed = toScore.length - saved;
       let lastError: string | null = null;
       if (toScore.length > 0 && saved === 0) {
@@ -150,6 +162,7 @@ export const run = internalAction({
         unique: unique.length,
         relevant: relevant.length,
         repeatsSkipped: relevant.length - fresh.length,
+        descriptionsBackfilled: backfilled,
         new: toScore.length,
         saved,
         failed,
@@ -230,6 +243,25 @@ export const filterNew = internalQuery({
   },
 });
 
+// Fills in descriptions for saved jobs that don't have one yet
+export const backfillDescriptions = internalMutation({
+  args: { items: v.array(v.object({ url: v.string(), description: v.string() })) },
+  handler: async (ctx, { items }) => {
+    let updated = 0;
+    for (const { url, description } of items) {
+      const job = await ctx.db
+        .query("jobs")
+        .withIndex("by_url", (q) => q.eq("url", url))
+        .first();
+      if (job && !job.description && description) {
+        await ctx.db.patch(job._id, { description });
+        updated++;
+      }
+    }
+    return updated;
+  },
+});
+
 export const saveJob = internalMutation({
   args: {
     title: v.string(),
@@ -237,6 +269,7 @@ export const saveJob = internalMutation({
     url: v.string(),
     location: v.string(),
     source: v.string(),
+    description: v.string(),
     dedupeKey: v.string(),
     matchScore: v.number(),
     reasons: v.array(v.string()),

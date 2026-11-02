@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
-import type { Id } from "../convex/_generated/dataModel";
+import type { Doc, Id } from "../convex/_generated/dataModel";
 import {
   Briefcase,
   Building2,
@@ -19,6 +19,13 @@ import {
   ExternalLink,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  Check,
+  MessageCircle,
+  FileText,
+  PenLine,
 } from "lucide-react";
 
 const JOBS_PER_PAGE = 6;
@@ -54,6 +61,9 @@ type LeadStatus = (typeof LEAD_TABS)[number] | "Not a fit" | "Archived";
 const JOB_STATUSES = ["Saved", "Applied", "Interview", "Rejected", "Offer"] as const;
 type JobStatus = (typeof JOB_STATUSES)[number];
 
+const PK_CITIES = ["lahore", "islamabad", "karachi", "rawalpindi", "faisalabad"];
+const NA_CITIES = ["toronto", "houston", "dallas", "chicago", "vancouver", "new york"];
+
 function timeAgo(ts?: number) {
   if (!ts) return "Never";
   const mins = Math.floor((Date.now() - ts) / 60000);
@@ -64,11 +74,59 @@ function timeAgo(ts?: number) {
   return `${Math.floor(hrs / 24)} d ago`;
 }
 
+/** Phone -> international digits for wa.me links (best effort). */
+function waNumber(phone: string, city?: string): string | null {
+  const first = phone.split(/[;,/]/)[0];
+  let digits = first.replace(/[^\d+]/g, "");
+  if (digits.startsWith("+")) return digits.slice(1);
+  digits = digits.replace(/\D/g, "");
+  if (digits.startsWith("00")) return digits.slice(2);
+  const c = (city ?? "").toLowerCase();
+  if (PK_CITIES.some((p) => c.includes(p)) && digits.startsWith("0")) return "92" + digits.slice(1);
+  if (NA_CITIES.some((n) => c.includes(n)) && digits.length === 10) return "1" + digits;
+  return digits.length >= 10 ? digits : null;
+}
+
+// ---------- Small UI helpers ----------
+
+function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        } catch {
+          /* clipboard blocked */
+        }
+      }}
+      className="flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
+    >
+      {copied ? <Check className="h-3 w-3 text-green-400" /> : <Copy className="h-3 w-3" />}
+      {copied ? "Copied" : label}
+    </button>
+  );
+}
+
+function Block({ title, text, copyText }: { title: string; text: string; copyText?: string }) {
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">{title}</span>
+        <CopyButton text={copyText ?? text} />
+      </div>
+      <p className="whitespace-pre-wrap text-sm text-zinc-200">{text}</p>
+    </div>
+  );
+}
+
 // ---------- Pagination ----------
 
 function paginate<T>(items: T[], page: number, perPage: number) {
   const pageCount = Math.max(1, Math.ceil(items.length / perPage));
-  const current = Math.min(Math.max(1, page), pageCount); // clamp if the list shrank
+  const current = Math.min(Math.max(1, page), pageCount);
   const start = (current - 1) * perPage;
   return {
     pageItems: items.slice(start, start + perPage),
@@ -189,6 +247,93 @@ function RunButton({
   );
 }
 
+// ---------- Panels ----------
+
+function KitPanel({ kit }: { kit: NonNullable<Doc<"jobs">["kit"]> }) {
+  const highlightsText = kit.highlights.map((h) => `- ${h}`).join("\n");
+  return (
+    <div className="mt-3 space-y-3">
+      <p className="text-xs text-zinc-500">
+        Use your <span className="font-medium text-zinc-300">{kit.resumeVariant}</span> CV · generated{" "}
+        {timeAgo(kit.generatedAt)} · review before sending
+      </p>
+      <Block title="Summary" text={kit.summary} />
+      <Block title="Highlights" text={highlightsText} />
+      <Block title="Skills to list first" text={kit.skills.join(" · ")} copyText={kit.skills.join(", ")} />
+      <Block title="Cover letter" text={kit.coverLetter} />
+      <Block
+        title={`Email — ${kit.emailSubject}`}
+        text={kit.emailBody}
+        copyText={`Subject: ${kit.emailSubject}\n\n${kit.emailBody}`}
+      />
+    </div>
+  );
+}
+
+function DraftPanel({
+  lead,
+  onContacted,
+}: {
+  lead: Doc<"leads">;
+  onContacted: () => void;
+}) {
+  const draft = lead.draft!;
+  const wa = lead.phone ? waNumber(lead.phone, lead.city) : null;
+  const waLink = wa ? `https://wa.me/${wa}?text=${encodeURIComponent(draft.whatsapp)}` : null;
+  const mailLink = lead.email
+    ? `mailto:${lead.email}?subject=${encodeURIComponent(draft.emailSubject)}&body=${encodeURIComponent(draft.emailBody)}`
+    : null;
+
+  return (
+    <div className="mt-3 space-y-3">
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">WhatsApp</span>
+          <div className="flex gap-2">
+            {waLink && (
+              <a
+                href={waLink}
+                target="_blank"
+                rel="noreferrer"
+                onClick={onContacted}
+                className="flex items-center gap-1 rounded-md bg-green-600 px-2 py-1 text-xs font-medium text-white hover:bg-green-500"
+              >
+                <MessageCircle className="h-3 w-3" /> Open in WhatsApp
+              </a>
+            )}
+            <CopyButton text={draft.whatsapp} />
+          </div>
+        </div>
+        <p className="whitespace-pre-wrap text-sm text-zinc-200">{draft.whatsapp}</p>
+      </div>
+
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+            Email — {draft.emailSubject}
+          </span>
+          <div className="flex gap-2">
+            {mailLink && (
+              <a
+                href={mailLink}
+                onClick={onContacted}
+                className="flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-900 hover:bg-white"
+              >
+                <Mail className="h-3 w-3" /> Open email
+              </a>
+            )}
+            <CopyButton text={`Subject: ${draft.emailSubject}\n\n${draft.emailBody}`} />
+          </div>
+        </div>
+        <p className="whitespace-pre-wrap text-sm text-zinc-200">{draft.emailBody}</p>
+      </div>
+      <p className="text-xs text-zinc-500">
+        Generated {timeAgo(draft.generatedAt)}. Opening WhatsApp or email marks the lead Contacted.
+      </p>
+    </div>
+  );
+}
+
 // ---------- Page ----------
 
 export default function Home() {
@@ -204,9 +349,16 @@ export default function Home() {
   const setJobStatus = useMutation(api.jobCrm.setStatus);
   const markApplied = useMutation(api.jobCrm.markApplied);
 
+  const draftLead = useAction(api.outreach.draftLead);
+  const generateKit = useAction(api.applicationKit.generateKit);
+
   const [leadTab, setLeadTab] = useState<(typeof LEAD_TABS)[number]>("New");
   const [jobPage, setJobPage] = useState(1);
   const [leadPage, setLeadPage] = useState(1);
+  const [openJob, setOpenJob] = useState<string | null>(null);
+  const [openLead, setOpenLead] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   if (data === undefined) {
     return (
@@ -219,6 +371,19 @@ export default function Home() {
   const agentRunning = (name: string) =>
     data.agents.find((a) => a.name === name)?.status === "running";
 
+  async function runAI(key: string, fn: () => Promise<unknown>, openSetter: (k: string) => void) {
+    setBusy(key);
+    setError(null);
+    try {
+      await fn();
+      openSetter(key);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const jobsPaged = paginate(data.matchJobs, jobPage, JOBS_PER_PAGE);
   const tabLeads = data.leads.filter((l) => (l.status ?? "New") === leadTab);
   const leadsPaged = paginate(tabLeads, leadPage, LEADS_PER_PAGE);
@@ -227,6 +392,15 @@ export default function Home() {
     <main className="min-h-screen bg-zinc-950 p-6 text-zinc-100 md:p-10">
       <h1 className="text-2xl font-semibold">Aadil AI Command Center</h1>
       <p className="mt-1 text-sm text-zinc-400">What needs your attention today</p>
+
+      {error && (
+        <div className="mt-4 flex items-start justify-between gap-3 rounded-lg border border-red-900 bg-red-950/50 p-3 text-sm text-red-300">
+          <span>{error}</span>
+          <button onClick={() => setError(null)} className="text-xs text-red-400 hover:text-red-200">
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* ---------- Daily briefing ---------- */}
       <section className="mt-8 rounded-xl border border-zinc-700 bg-gradient-to-b from-zinc-900 to-zinc-950 p-5">
@@ -343,59 +517,101 @@ export default function Home() {
       <section className="mt-8 rounded-xl border border-zinc-800 bg-zinc-900 p-5">
         <h2 className="font-medium">Job matches</h2>
         <p className="mt-1 text-xs text-zinc-500">
-          Jobs you haven&apos;t acted on, best first. “Apply ↗” opens the posting and marks it Applied.
+          Jobs you haven&apos;t acted on, best first. “Prepare application” writes a tailored kit;
+          “Apply ↗” opens the posting and marks it Applied.
         </p>
         {data.matchJobs.length === 0 && (
           <p className="mt-4 text-sm text-zinc-500">Nothing new — you&apos;re caught up.</p>
         )}
-        <ul className="mt-4 grid gap-5 md:grid-cols-2">
-          {jobsPaged.pageItems.map((j) => (
-            <li key={j._id}>
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <span className="block text-sm">{j.title}</span>
-                  <span className="block text-xs text-zinc-500">
-                    {j.company} · {j.location ?? "—"} · {j.source}
-                  </span>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  {j.recommendation && (
-                    <span className={`rounded px-1.5 py-0.5 text-xs ${recBadge[j.recommendation]}`}>
-                      {j.recommendation}
+        <ul className="mt-4 divide-y divide-zinc-800">
+          {jobsPaged.pageItems.map((j) => {
+            const id = j._id as Id<"jobs">;
+            const isOpen = openJob === j._id && !!j.kit;
+            const isBusy = busy === j._id;
+            return (
+              <li key={j._id} className="py-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <span className="block text-sm">{j.title}</span>
+                    <span className="block text-xs text-zinc-500">
+                      {j.company} · {j.location ?? "—"} · {j.source}
                     </span>
-                  )}
-                  <span className="text-sm font-semibold text-green-400">{j.matchScore}%</span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {j.recommendation && (
+                      <span className={`rounded px-1.5 py-0.5 text-xs ${recBadge[j.recommendation]}`}>
+                        {j.recommendation}
+                      </span>
+                    )}
+                    <span className="text-sm font-semibold text-green-400">{j.matchScore}%</span>
+                  </div>
                 </div>
-              </div>
-              {j.missing?.length ? (
-                <p className="mt-1 text-xs text-zinc-500">Missing: {j.missing.join(", ")}</p>
-              ) : null}
-              <div className="mt-2 flex items-center gap-2">
-                <a
-                  href={j.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  onClick={() => markApplied({ id: j._id as Id<"jobs"> })}
-                  className="flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-900 hover:bg-white"
-                >
-                  Apply <ExternalLink className="h-3 w-3" />
-                </a>
-                <select
-                  value={j.status}
-                  onChange={(e) =>
-                    setJobStatus({ id: j._id as Id<"jobs">, status: e.target.value as JobStatus })
-                  }
-                  className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs"
-                >
-                  {JOB_STATUSES.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </li>
-          ))}
+                {j.missing?.length ? (
+                  <p className="mt-1 text-xs text-zinc-500">Missing: {j.missing.join(", ")}</p>
+                ) : null}
+
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() =>
+                      j.kit && !isOpen
+                        ? setOpenJob(j._id)
+                        : isOpen
+                          ? setOpenJob(null)
+                          : runAI(j._id, () => generateKit({ id }), setOpenJob)
+                    }
+                    disabled={isBusy}
+                    className="flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs hover:bg-zinc-800 disabled:opacity-50"
+                  >
+                    {isBusy ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : isOpen ? (
+                      <ChevronUp className="h-3 w-3" />
+                    ) : (
+                      <FileText className="h-3 w-3" />
+                    )}
+                    {isBusy
+                      ? "Writing…"
+                      : isOpen
+                        ? "Hide kit"
+                        : j.kit
+                          ? "View application kit"
+                          : "Prepare application"}
+                  </button>
+                  {j.kit && (
+                    <button
+                      onClick={() => runAI(j._id, () => generateKit({ id }), setOpenJob)}
+                      disabled={isBusy}
+                      className="flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 disabled:opacity-50"
+                    >
+                      <RefreshCw className="h-3 w-3" /> Regenerate
+                    </button>
+                  )}
+                  <a
+                    href={j.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={() => markApplied({ id })}
+                    className="flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-900 hover:bg-white"
+                  >
+                    Apply <ExternalLink className="h-3 w-3" />
+                  </a>
+                  <select
+                    value={j.status}
+                    onChange={(e) => setJobStatus({ id, status: e.target.value as JobStatus })}
+                    className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs"
+                  >
+                    {JOB_STATUSES.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {isOpen && j.kit && <KitPanel kit={j.kit} />}
+              </li>
+            );
+          })}
         </ul>
         <Pagination
           current={jobsPaged.current}
@@ -413,7 +629,7 @@ export default function Home() {
           <div>
             <h2 className="font-medium">TechVersa leads</h2>
             <p className="mt-1 text-xs text-zinc-500">
-              Tapping a phone or email marks the lead Contacted.
+              “Draft message” writes WhatsApp + email outreach. Calling, emailing or opening WhatsApp marks the lead Contacted.
             </p>
           </div>
           <div className="flex flex-wrap gap-1">
@@ -443,6 +659,8 @@ export default function Home() {
         <ul className="mt-4 divide-y divide-zinc-800">
           {leadsPaged.pageItems.map((l) => {
             const id = l._id as Id<"leads">;
+            const isOpen = openLead === l._id && !!l.draft;
+            const isBusy = busy === l._id;
             return (
               <li key={l._id} className="py-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -527,6 +745,44 @@ export default function Home() {
                     Check on Google ↗
                   </a>
                 </div>
+
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() =>
+                      l.draft && !isOpen
+                        ? setOpenLead(l._id)
+                        : isOpen
+                          ? setOpenLead(null)
+                          : runAI(l._id, () => draftLead({ id }), setOpenLead)
+                    }
+                    disabled={isBusy}
+                    className="flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs hover:bg-zinc-800 disabled:opacity-50"
+                  >
+                    {isBusy ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : isOpen ? (
+                      <ChevronUp className="h-3 w-3" />
+                    ) : l.draft ? (
+                      <ChevronDown className="h-3 w-3" />
+                    ) : (
+                      <PenLine className="h-3 w-3" />
+                    )}
+                    {isBusy ? "Writing…" : isOpen ? "Hide message" : l.draft ? "View message" : "Draft message"}
+                  </button>
+                  {l.draft && (
+                    <button
+                      onClick={() => runAI(l._id, () => draftLead({ id }), setOpenLead)}
+                      disabled={isBusy}
+                      className="flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 disabled:opacity-50"
+                    >
+                      <RefreshCw className="h-3 w-3" /> Regenerate
+                    </button>
+                  )}
+                </div>
+
+                {isOpen && l.draft && (
+                  <DraftPanel lead={l} onContacted={() => markContacted({ id })} />
+                )}
               </li>
             );
           })}

@@ -37,6 +37,22 @@ function stripHtml(html: string | undefined | null): string {
     .trim();
 }
 
+/**
+ * Removes anti-bot "application traps" some boards hide in descriptions
+ * (e.g. RemoteOK: "Please mention the word X and tag Y when applying").
+ * The tag identifies the scraper, so it must never reach an application.
+ */
+export function stripApplyTraps(text: string): string {
+  return text
+    .replace(/please mention the word[\s\S]*?(spam applicants?|when applying)[^.]*\.?/gi, " ")
+    .replace(/\(?#?\b[A-Za-z0-9+/]{12,}={1,2}\)?/g, " ") // base64-like tags
+    .replace(/#[A-Za-z0-9]{10,}/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const cleanDescription = (html: string | undefined | null) => stripApplyTraps(stripHtml(html));
+
 function toMs(value: unknown): number | undefined {
   if (typeof value === "number") return value < 1e12 ? value * 1000 : value;
   if (typeof value === "string") {
@@ -57,7 +73,7 @@ async function fromRemotive(): Promise<NormalizedJob[]> {
     company: j.company_name,
     location: j.candidate_required_location || "Unspecified",
     salary: j.salary || "",
-    description: stripHtml(j.description),
+    description: cleanDescription(j.description),
     source: "Remotive",
     postedAt: toMs(j.publication_date),
   }));
@@ -74,7 +90,7 @@ async function fromArbeitnow(): Promise<NormalizedJob[]> {
       company: j.company_name,
       location: j.location || "Remote",
       salary: "",
-      description: stripHtml(j.description),
+      description: cleanDescription(j.description),
       source: "Arbeitnow",
       postedAt: toMs(j.created_at),
     }));
@@ -94,7 +110,7 @@ async function fromRemoteOK(): Promise<NormalizedJob[]> {
         j.salary_min && j.salary_max
           ? `$${j.salary_min} - $${j.salary_max}`
           : "",
-      description: stripHtml(j.description),
+      description: cleanDescription(j.description),
       source: "RemoteOK",
       postedAt: toMs(j.epoch ?? j.date),
     }));
@@ -112,7 +128,7 @@ async function fromJobicy(): Promise<NormalizedJob[]> {
       j.annualSalaryMin && j.annualSalaryMax
         ? `${j.salaryCurrency ?? ""} ${j.annualSalaryMin} - ${j.annualSalaryMax}`.trim()
         : "",
-    description: stripHtml(j.jobDescription || j.jobExcerpt),
+    description: cleanDescription(j.jobDescription || j.jobExcerpt),
     source: "Jobicy",
     postedAt: toMs(j.pubDate),
   }));

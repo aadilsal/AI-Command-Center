@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation, mutation } from "./_generated/server";
 import { jobKey } from "./keys";
+import { stripApplyTraps } from "./jobSources";
 
 const jobStatus = v.union(
   v.literal("Saved"),
@@ -40,5 +41,31 @@ export const backfillDedupeKeys = internalMutation({
       updated++;
     }
     return { updated };
+  },
+});
+
+// One-time: strip anti-bot traps from stored descriptions and clear kits built before the fix
+// Run: npx convex run jobCrm:sanitizeStored
+export const sanitizeStored = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    let cleaned = 0;
+    let kitsCleared = 0;
+    for (const job of await ctx.db.query("jobs").collect()) {
+      const patch: Record<string, unknown> = {};
+      if (job.description) {
+        const safe = stripApplyTraps(job.description);
+        if (safe !== job.description) {
+          patch.description = safe;
+          cleaned++;
+        }
+      }
+      if (job.kit) {
+        patch.kit = undefined;
+        kitsCleared++;
+      }
+      if (Object.keys(patch).length) await ctx.db.patch(job._id, patch);
+    }
+    return { descriptionsCleaned: cleaned, kitsCleared };
   },
 });
