@@ -6,14 +6,10 @@ import { api } from "../convex/_generated/api";
 import type { Doc, Id } from "../convex/_generated/dataModel";
 import {
   Briefcase,
-  Building2,
+  Radar,
   Bot,
   Loader2,
   Play,
-  Phone,
-  Mail,
-  Globe,
-  MapPin,
   Sparkles,
   RefreshCw,
   ExternalLink,
@@ -23,13 +19,13 @@ import {
   ChevronUp,
   Copy,
   Check,
-  MessageCircle,
   FileText,
-  PenLine,
+  Lightbulb,
+  Quote,
 } from "lucide-react";
 
 const JOBS_PER_PAGE = 6;
-const LEADS_PER_PAGE = 10;
+const PROBLEMS_PER_PAGE = 8;
 
 const statusDot: Record<string, string> = {
   running: "bg-green-500 animate-pulse",
@@ -43,26 +39,18 @@ const recBadge: Record<string, string> = {
   Skip: "bg-zinc-500/15 text-zinc-400",
 };
 
-const priorityBadge: Record<string, string> = {
-  High: "bg-green-500/15 text-green-400",
-  Medium: "bg-yellow-500/15 text-yellow-400",
-  Low: "bg-zinc-500/15 text-zinc-400",
-};
-
 const kindBadge: Record<string, { label: string; cls: string }> = {
   followup: { label: "Follow up", cls: "bg-orange-500/15 text-orange-400" },
   job: { label: "Job", cls: "bg-blue-500/15 text-blue-400" },
+  opportunity: { label: "Opportunity", cls: "bg-purple-500/15 text-purple-400" },
   lead: { label: "Lead", cls: "bg-green-500/15 text-green-400" },
   system: { label: "System", cls: "bg-zinc-500/15 text-zinc-400" },
 };
 
-const LEAD_TABS = ["New", "Contacted", "Replied", "Won", "Lost"] as const;
-type LeadStatus = (typeof LEAD_TABS)[number] | "Not a fit" | "Archived";
 const JOB_STATUSES = ["Saved", "Applied", "Interview", "Rejected", "Offer"] as const;
 type JobStatus = (typeof JOB_STATUSES)[number];
-
-const PK_CITIES = ["lahore", "islamabad", "karachi", "rawalpindi", "faisalabad"];
-const NA_CITIES = ["toronto", "houston", "dallas", "chicago", "vancouver", "new york"];
+const PROBLEM_TABS = ["New", "Exploring", "Building", "Launched", "Parked"] as const;
+type ProblemStatus = (typeof PROBLEM_TABS)[number];
 
 function timeAgo(ts?: number) {
   if (!ts) return "Never";
@@ -74,17 +62,10 @@ function timeAgo(ts?: number) {
   return `${Math.floor(hrs / 24)} d ago`;
 }
 
-/** Phone -> international digits for wa.me links (best effort). */
-function waNumber(phone: string, city?: string): string | null {
-  const first = phone.split(/[;,/]/)[0];
-  let digits = first.replace(/[^\d+]/g, "");
-  if (digits.startsWith("+")) return digits.slice(1);
-  digits = digits.replace(/\D/g, "");
-  if (digits.startsWith("00")) return digits.slice(2);
-  const c = (city ?? "").toLowerCase();
-  if (PK_CITIES.some((p) => c.includes(p)) && digits.startsWith("0")) return "92" + digits.slice(1);
-  if (NA_CITIES.some((n) => c.includes(n)) && digits.length === 10) return "1" + digits;
-  return digits.length >= 10 ? digits : null;
+function scoreColor(score: number) {
+  if (score >= 60) return "text-green-400";
+  if (score >= 40) return "text-yellow-400";
+  return "text-zinc-400";
 }
 
 // ---------- Small UI helpers ----------
@@ -118,6 +99,20 @@ function Block({ title, text, copyText }: { title: string; text: string; copyTex
         <CopyButton text={copyText ?? text} />
       </div>
       <p className="whitespace-pre-wrap text-sm text-zinc-200">{text}</p>
+    </div>
+  );
+}
+
+function ListBlock({ title, items }: { title: string; items: string[] }) {
+  if (!items.length) return null;
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+      <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">{title}</span>
+      <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-zinc-200">
+        {items.map((x, i) => (
+          <li key={i}>{x}</li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -270,66 +265,101 @@ function KitPanel({ kit }: { kit: NonNullable<Doc<"jobs">["kit"]> }) {
   );
 }
 
-function DraftPanel({
-  lead,
-  onContacted,
-}: {
-  lead: Doc<"leads">;
-  onContacted: () => void;
-}) {
-  const draft = lead.draft!;
-  const wa = lead.phone ? waNumber(lead.phone, lead.city) : null;
-  const waLink = wa ? `https://wa.me/${wa}?text=${encodeURIComponent(draft.whatsapp)}` : null;
-  const mailLink = lead.email
-    ? `mailto:${lead.email}?subject=${encodeURIComponent(draft.emailSubject)}&body=${encodeURIComponent(draft.emailBody)}`
-    : null;
+function solutionAsMarkdown(p: Doc<"problems">) {
+  const s = p.solution!;
+  const bullets = (xs: string[]) => xs.map((x) => `- ${x}`).join("\n");
+  return `# ${s.name}
 
+**Problem:** ${p.title}
+**Target user:** ${s.targetUser}
+
+## Concept
+${s.concept}
+
+## MVP features
+${bullets(s.mvpFeatures)}
+
+## Stack
+${bullets(s.stack)}
+
+**Build effort:** ${s.buildEffort}
+
+## Pricing
+${s.pricing}
+
+## Why it wins
+${s.differentiation}
+
+## Where the users are
+${bullets(s.channels)}
+
+## Content angles
+${bullets(s.contentAngles)}
+
+## Validate before building
+${bullets(s.validationSteps)}
+
+## Risks
+${bullets(s.risks)}
+`;
+}
+
+function SolutionPanel({ problem }: { problem: Doc<"problems"> }) {
+  const s = problem.solution!;
   return (
     <div className="mt-3 space-y-3">
-      <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">WhatsApp</span>
-          <div className="flex gap-2">
-            {waLink && (
-              <a
-                href={waLink}
-                target="_blank"
-                rel="noreferrer"
-                onClick={onContacted}
-                className="flex items-center gap-1 rounded-md bg-green-600 px-2 py-1 text-xs font-medium text-white hover:bg-green-500"
-              >
-                <MessageCircle className="h-3 w-3" /> Open in WhatsApp
-              </a>
-            )}
-            <CopyButton text={draft.whatsapp} />
-          </div>
-        </div>
-        <p className="whitespace-pre-wrap text-sm text-zinc-200">{draft.whatsapp}</p>
-      </div>
-
-      <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-            Email — {draft.emailSubject}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm">
+          <span className="text-lg font-semibold">{s.name}</span>
+          <span className="ml-2 text-xs text-zinc-500">
+            designed {timeAgo(s.generatedAt)} · {s.buildEffort}
           </span>
-          <div className="flex gap-2">
-            {mailLink && (
-              <a
-                href={mailLink}
-                onClick={onContacted}
-                className="flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-900 hover:bg-white"
-              >
-                <Mail className="h-3 w-3" /> Open email
-              </a>
-            )}
-            <CopyButton text={`Subject: ${draft.emailSubject}\n\n${draft.emailBody}`} />
-          </div>
-        </div>
-        <p className="whitespace-pre-wrap text-sm text-zinc-200">{draft.emailBody}</p>
+        </p>
+        <CopyButton text={solutionAsMarkdown(problem)} label="Copy as doc" />
       </div>
-      <p className="text-xs text-zinc-500">
-        Generated {timeAgo(draft.generatedAt)}. Opening WhatsApp or email marks the lead Contacted.
-      </p>
+      <Block title="Concept" text={s.concept} />
+      <Block title="Target user" text={s.targetUser} />
+      <div className="grid gap-3 md:grid-cols-2">
+        <ListBlock title="MVP features" items={s.mvpFeatures} />
+        <ListBlock title="Stack" items={s.stack} />
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <Block title="Pricing" text={s.pricing} />
+        <Block title="Why it wins" text={s.differentiation} />
+      </div>
+      <ListBlock title="Validate before building" items={s.validationSteps} />
+      <div className="grid gap-3 md:grid-cols-2">
+        <ListBlock title="Where the users are" items={s.channels} />
+        <ListBlock title="Content angles" items={s.contentAngles} />
+      </div>
+      <ListBlock title="Risks" items={s.risks} />
+    </div>
+  );
+}
+
+function EvidenceList({ problem }: { problem: Doc<"problems"> }) {
+  return (
+    <div className="mt-3 space-y-2">
+      {problem.evidence.map((e, i) => (
+        <div key={i} className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+          <p className="flex gap-2 text-sm text-zinc-200">
+            <Quote className="mt-0.5 h-3 w-3 shrink-0 text-zinc-500" />
+            <span>{e.quote}</span>
+          </p>
+          <a
+            href={e.url}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-1 inline-flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-200"
+          >
+            {e.source} <ExternalLink className="h-3 w-3" />
+          </a>
+        </div>
+      ))}
+      {problem.wtpEvidence.length > 0 && (
+        <ListBlock title="Willingness to pay" items={problem.wtpEvidence} />
+      )}
+      {problem.workarounds.length > 0 && <ListBlock title="Current workarounds" items={problem.workarounds} />}
     </div>
   );
 }
@@ -341,24 +371,24 @@ export default function Home() {
   const briefing = useQuery(api.briefingAgent.latest);
 
   const runCareerAgent = useMutation(api.careerAgent.runNow);
-  const runLeadAgent = useMutation(api.leadAgent.runNow);
+  const runPainAgent = useMutation(api.painAgent.runNow);
   const runBriefing = useMutation(api.briefingAgent.runNow);
 
-  const setLeadStatus = useMutation(api.leadCrm.setStatus);
-  const markContacted = useMutation(api.leadCrm.markContacted);
   const setJobStatus = useMutation(api.jobCrm.setStatus);
   const markApplied = useMutation(api.jobCrm.markApplied);
+  const setProblemStatus = useMutation(api.solutionDesigner.setStatus);
 
-  const draftLead = useAction(api.outreach.draftLead);
   const generateKit = useAction(api.applicationKit.generateKit);
+  const designSolution = useAction(api.solutionDesigner.designSolution);
 
-  const [leadTab, setLeadTab] = useState<(typeof LEAD_TABS)[number]>("New");
   const [jobPage, setJobPage] = useState(1);
-  const [leadPage, setLeadPage] = useState(1);
+  const [problemTab, setProblemTab] = useState<ProblemStatus>("New");
+  const [problemPage, setProblemPage] = useState(1);
   const [openJob, setOpenJob] = useState<string | null>(null);
-  const [openLead, setOpenLead] = useState<string | null>(null);
+  const [openSolution, setOpenSolution] = useState<string | null>(null);
+  const [openEvidence, setOpenEvidence] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ kind: "error" | "info"; text: string } | null>(null);
 
   if (data === undefined) {
     return (
@@ -371,32 +401,66 @@ export default function Home() {
   const agentRunning = (name: string) =>
     data.agents.find((a) => a.name === name)?.status === "running";
 
-  async function runAI(key: string, fn: () => Promise<unknown>, openSetter: (k: string) => void) {
+  async function runAI(key: string, fn: () => Promise<any>, onDone?: (result: any) => void) {
     setBusy(key);
-    setError(null);
+    setNotice(null);
     try {
-      await fn();
-      openSetter(key);
+      const result = await fn();
+      onDone?.(result);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setNotice({ kind: "error", text: err instanceof Error ? err.message : String(err) });
     } finally {
       setBusy(null);
     }
   }
 
+  function design(problem: Doc<"problems">, force = false) {
+    const id = problem._id as Id<"problems">;
+    runAI(problem._id, () => designSolution({ id, force }), (r) => {
+      if (r?.viable === false) {
+        setNotice({ kind: "info", text: `Parked “${problem.title}”: ${r.parkedReason}` });
+      } else if (r?.needsMoreEvidence) {
+        setNotice({ kind: "info", text: r.message });
+      } else {
+        // Designing moves New → Exploring; follow it there and open the design
+        if (problem.status === "New") setProblemTab("Exploring");
+        setOpenSolution(problem._id);
+      }
+    });
+  }
+
+  // Briefing links like "#problem-<id>" jump to the right tab/page and open the problem
+  function jumpToProblem(id: string) {
+    const p = data!.problems.find((x) => x._id === id);
+    if (!p) return;
+    const inTab = data!.problems.filter((x) => x.status === p.status);
+    const index = inTab.findIndex((x) => x._id === id);
+    setProblemTab(p.status);
+    setProblemPage(Math.floor(index / PROBLEMS_PER_PAGE) + 1);
+    if (p.solution) setOpenSolution(id);
+    else setOpenEvidence(id);
+    setTimeout(() => document.getElementById(`problem-${id}`)?.scrollIntoView({ behavior: "smooth" }), 50);
+  }
+
   const jobsPaged = paginate(data.matchJobs, jobPage, JOBS_PER_PAGE);
-  const tabLeads = data.leads.filter((l) => (l.status ?? "New") === leadTab);
-  const leadsPaged = paginate(tabLeads, leadPage, LEADS_PER_PAGE);
+  const tabProblems = data.problems.filter((p) => p.status === problemTab);
+  const problemsPaged = paginate(tabProblems, problemPage, PROBLEMS_PER_PAGE);
 
   return (
     <main className="min-h-screen bg-zinc-950 p-6 text-zinc-100 md:p-10">
       <h1 className="text-2xl font-semibold">Aadil AI Command Center</h1>
       <p className="mt-1 text-sm text-zinc-400">What needs your attention today</p>
 
-      {error && (
-        <div className="mt-4 flex items-start justify-between gap-3 rounded-lg border border-red-900 bg-red-950/50 p-3 text-sm text-red-300">
-          <span>{error}</span>
-          <button onClick={() => setError(null)} className="text-xs text-red-400 hover:text-red-200">
+      {notice && (
+        <div
+          className={`mt-4 flex items-start justify-between gap-3 rounded-lg border p-3 text-sm ${
+            notice.kind === "error"
+              ? "border-red-900 bg-red-950/50 text-red-300"
+              : "border-zinc-700 bg-zinc-900 text-zinc-300"
+          }`}
+        >
+          <span>{notice.text}</span>
+          <button onClick={() => setNotice(null)} className="text-xs opacity-70 hover:opacity-100">
             Dismiss
           </button>
         </div>
@@ -428,33 +492,42 @@ export default function Home() {
           <>
             <p className="mt-3 text-lg font-medium">{briefing.headline}</p>
             <ol className="mt-4 space-y-3">
-              {briefing.actions.map((a, i) => (
-                <li key={i} className="flex gap-3">
-                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-800 text-xs text-zinc-400">
-                    {i + 1}
-                  </span>
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className={`rounded px-1.5 py-0.5 text-xs ${kindBadge[a.kind].cls}`}>
-                        {kindBadge[a.kind].label}
-                      </span>
-                      {a.url ? (
-                        <a
-                          href={a.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="flex items-center gap-1 text-sm hover:underline"
-                        >
-                          {a.title} <ExternalLink className="h-3 w-3 text-zinc-500" />
-                        </a>
-                      ) : (
-                        <span className="text-sm">{a.title}</span>
-                      )}
+              {briefing.actions.map((a, i) => {
+                const badge = kindBadge[a.kind] ?? kindBadge.system;
+                const isProblemLink = a.url?.startsWith("#problem-");
+                return (
+                  <li key={i} className="flex gap-3">
+                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-800 text-xs text-zinc-400">
+                      {i + 1}
+                    </span>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`rounded px-1.5 py-0.5 text-xs ${badge.cls}`}>{badge.label}</span>
+                        {a.url && isProblemLink ? (
+                          <button
+                            onClick={() => jumpToProblem(a.url!.replace("#problem-", ""))}
+                            className="text-left text-sm hover:underline"
+                          >
+                            {a.title}
+                          </button>
+                        ) : a.url ? (
+                          <a
+                            href={a.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex items-center gap-1 text-sm hover:underline"
+                          >
+                            {a.title} <ExternalLink className="h-3 w-3 text-zinc-500" />
+                          </a>
+                        ) : (
+                          <span className="text-sm">{a.title}</span>
+                        )}
+                      </div>
+                      <p className="mt-0.5 text-xs text-zinc-500">{a.why}</p>
                     </div>
-                    <p className="mt-0.5 text-xs text-zinc-500">{a.why}</p>
-                  </div>
-                </li>
-              ))}
+                  </li>
+                );
+              })}
             </ol>
           </>
         )}
@@ -478,13 +551,13 @@ export default function Home() {
         <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
           <div className="flex items-center justify-between">
             <span className="flex items-center gap-2 text-zinc-400">
-              <Building2 className="h-4 w-4" /> TechVersa Agent
+              <Radar className="h-4 w-4" /> Opportunity Radar
             </span>
-            <RunButton running={agentRunning("Lead Agent")} onRun={() => runLeadAgent()} />
+            <RunButton running={agentRunning("Pain Agent")} onRun={() => runPainAgent()} />
           </div>
-          <p className="mt-3 text-3xl font-semibold">{data.newLeads}</p>
+          <p className="mt-3 text-3xl font-semibold">{data.activeProblems}</p>
           <p className="text-sm text-zinc-400">
-            new leads · {data.highPriorityLeads} high priority · {data.archivedLeads} archived
+            problems · {data.readyToDesign} ready to design · {data.pendingSignals} signals queued
           </p>
         </section>
 
@@ -512,6 +585,169 @@ export default function Home() {
           </ul>
         </section>
       </div>
+
+      {/* ---------- Opportunity Radar ---------- */}
+      <section className="mt-8 rounded-xl border border-zinc-800 bg-zinc-900 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="font-medium">Opportunity Radar</h2>
+            <p className="mt-1 text-xs text-zinc-500">
+              Real business pain, grouped and scored. Problems need {data.minEvidenceToDesign}+ pieces of
+              evidence before designing a solution.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {PROBLEM_TABS.map((tab) => (
+              <button
+                key={tab}
+                onClick={() => {
+                  setProblemTab(tab);
+                  setProblemPage(1);
+                }}
+                className={`rounded-md px-2.5 py-1 text-xs ${
+                  problemTab === tab
+                    ? "bg-zinc-100 text-zinc-900"
+                    : "border border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+                }`}
+              >
+                {tab} ({data.problemCounts[tab] ?? 0})
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {tabProblems.length === 0 && (
+          <p className="mt-4 text-sm text-zinc-500">
+            {problemTab === "New" && data.pendingSignals > 0
+              ? `Nothing here yet — ${data.pendingSignals} signals are queued for analysis.`
+              : `No problems with status “${problemTab}”.`}
+          </p>
+        )}
+
+        <ul className="mt-4 divide-y divide-zinc-800">
+          {problemsPaged.pageItems.map((p) => {
+            const id = p._id as Id<"problems">;
+            const isBusy = busy === p._id;
+            const solutionOpen = openSolution === p._id && !!p.solution;
+            const evidenceOpen = openEvidence === p._id;
+            const ready = p.signalCount >= data.minEvidenceToDesign;
+
+            return (
+              <li key={p._id} id={`problem-${p._id}`} className="scroll-mt-6 py-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium">{p.title}</p>
+                    <p className="mt-0.5 text-xs text-zinc-500">
+                      {p.persona}
+                      {p.industries.length ? ` · ${p.industries.join(", ")}` : ""}
+                    </p>
+                    <p className="mt-1 text-xs text-zinc-400">{p.summary}</p>
+                    <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">
+                        {p.signalCount} evidence
+                      </span>
+                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">
+                        {p.sources.join(" · ")}
+                      </span>
+                      {p.wtpCount > 0 && (
+                        <span className="rounded bg-green-500/15 px-1.5 py-0.5 text-green-400">
+                          {p.wtpCount} would pay
+                        </span>
+                      )}
+                      {p.solution && (
+                        <span className="rounded bg-purple-500/15 px-1.5 py-0.5 text-purple-400">
+                          {p.solution.name}
+                        </span>
+                      )}
+                    </div>
+                    {p.status === "Parked" && p.parkedReason && (
+                      <p className="mt-2 text-xs text-zinc-500">Parked: {p.parkedReason}</p>
+                    )}
+                  </div>
+
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className={`text-lg font-semibold ${scoreColor(p.score)}`}>{p.score}</span>
+                    <select
+                      value={p.status}
+                      onChange={(e) => setProblemStatus({ id, status: e.target.value as ProblemStatus })}
+                      className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs"
+                    >
+                      {PROBLEM_TABS.map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => setOpenEvidence(evidenceOpen ? null : p._id)}
+                    className="flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs hover:bg-zinc-800"
+                  >
+                    {evidenceOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                    Evidence ({p.evidence.length})
+                  </button>
+
+                  {p.solution ? (
+                    <>
+                      <button
+                        onClick={() => setOpenSolution(solutionOpen ? null : p._id)}
+                        className="flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-900 hover:bg-white"
+                      >
+                        <Lightbulb className="h-3 w-3" />
+                        {solutionOpen ? "Hide solution" : "View solution"}
+                      </button>
+                      <button
+                        onClick={() => design(p, true)}
+                        disabled={isBusy}
+                        className="flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 disabled:opacity-50"
+                      >
+                        {isBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                        {isBusy ? "Designing…" : "Redesign"}
+                      </button>
+                    </>
+                  ) : p.status !== "Parked" && ready ? (
+                    <button
+                      onClick={() => design(p)}
+                      disabled={isBusy}
+                      className="flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-900 hover:bg-white disabled:opacity-50"
+                    >
+                      {isBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Lightbulb className="h-3 w-3" />}
+                      {isBusy ? "Designing…" : "Design solution"}
+                    </button>
+                  ) : p.status !== "Parked" ? (
+                    <>
+                      <span className="rounded-md border border-dashed border-zinc-700 px-2 py-1 text-xs text-zinc-500">
+                        Needs more evidence ({p.signalCount}/{data.minEvidenceToDesign})
+                      </span>
+                      <button
+                        onClick={() => design(p, true)}
+                        disabled={isBusy}
+                        className="text-xs text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline disabled:opacity-50"
+                      >
+                        {isBusy ? "Designing…" : "design anyway"}
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+
+                {evidenceOpen && <EvidenceList problem={p} />}
+                {solutionOpen && p.solution && <SolutionPanel problem={p} />}
+              </li>
+            );
+          })}
+        </ul>
+        <Pagination
+          current={problemsPaged.current}
+          pageCount={problemsPaged.pageCount}
+          from={problemsPaged.from}
+          to={problemsPaged.to}
+          total={tabProblems.length}
+          onChange={setProblemPage}
+        />
+      </section>
 
       {/* ---------- Job matches ---------- */}
       <section className="mt-8 rounded-xl border border-zinc-800 bg-zinc-900 p-5">
@@ -557,7 +793,7 @@ export default function Home() {
                         ? setOpenJob(j._id)
                         : isOpen
                           ? setOpenJob(null)
-                          : runAI(j._id, () => generateKit({ id }), setOpenJob)
+                          : runAI(j._id, () => generateKit({ id }), () => setOpenJob(j._id))
                     }
                     disabled={isBusy}
                     className="flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs hover:bg-zinc-800 disabled:opacity-50"
@@ -579,7 +815,7 @@ export default function Home() {
                   </button>
                   {j.kit && (
                     <button
-                      onClick={() => runAI(j._id, () => generateKit({ id }), setOpenJob)}
+                      onClick={() => runAI(j._id, () => generateKit({ id }), () => setOpenJob(j._id))}
                       disabled={isBusy}
                       className="flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 disabled:opacity-50"
                     >
@@ -620,180 +856,6 @@ export default function Home() {
           to={jobsPaged.to}
           total={data.matchJobs.length}
           onChange={setJobPage}
-        />
-      </section>
-
-      {/* ---------- TechVersa leads pipeline ---------- */}
-      <section className="mt-8 rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="font-medium">TechVersa leads</h2>
-            <p className="mt-1 text-xs text-zinc-500">
-              “Draft message” writes WhatsApp + email outreach. Calling, emailing or opening WhatsApp marks the lead Contacted.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {LEAD_TABS.map((tab) => (
-              <button
-                key={tab}
-                onClick={() => {
-                  setLeadTab(tab);
-                  setLeadPage(1);
-                }}
-                className={`rounded-md px-2.5 py-1 text-xs ${
-                  leadTab === tab
-                    ? "bg-zinc-100 text-zinc-900"
-                    : "border border-zinc-700 text-zinc-400 hover:bg-zinc-800"
-                }`}
-              >
-                {tab} ({data.statusCounts[tab] ?? 0})
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {tabLeads.length === 0 && (
-          <p className="mt-4 text-sm text-zinc-500">No leads with status “{leadTab}”.</p>
-        )}
-
-        <ul className="mt-4 divide-y divide-zinc-800">
-          {leadsPaged.pageItems.map((l) => {
-            const id = l._id as Id<"leads">;
-            const isOpen = openLead === l._id && !!l.draft;
-            const isBusy = busy === l._id;
-            return (
-              <li key={l._id} className="py-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium">
-                      {l.company}{" "}
-                      <span className="font-normal text-zinc-500">
-                        · {l.industry}
-                        {l.city ? ` · ${l.city}` : ""}
-                      </span>
-                    </p>
-                    <p className="mt-1 text-xs text-zinc-400">{l.problem}</p>
-                    <p className="text-xs text-zinc-400">→ {l.solution}</p>
-                  </div>
-
-                  <div className="flex shrink-0 items-center gap-2">
-                    <span className={`rounded px-1.5 py-0.5 text-xs ${priorityBadge[l.priority]}`}>
-                      {l.priority}
-                    </span>
-                    <span className="text-sm font-semibold text-green-400">{l.fitScore ?? "—"}</span>
-                    <select
-                      value={l.status ?? "New"}
-                      onChange={(e) => setLeadStatus({ id, status: e.target.value as LeadStatus })}
-                      className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs"
-                    >
-                      {[...LEAD_TABS, "Not a fit"].map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-400">
-                  {l.phone && (
-                    <a
-                      href={`tel:${l.phone}`}
-                      onClick={() => markContacted({ id })}
-                      className="flex items-center gap-1 hover:text-zinc-100"
-                    >
-                      <Phone className="h-3 w-3" /> {l.phone}
-                    </a>
-                  )}
-                  {l.email && (
-                    <a
-                      href={`mailto:${l.email}`}
-                      onClick={() => markContacted({ id })}
-                      className="flex items-center gap-1 hover:text-zinc-100"
-                    >
-                      <Mail className="h-3 w-3" /> {l.email}
-                    </a>
-                  )}
-                  {l.socialUrl && (
-                    <a
-                      href={l.socialUrl.startsWith("http") ? l.socialUrl : `https://${l.socialUrl}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex items-center gap-1 hover:text-zinc-100"
-                    >
-                      <Globe className="h-3 w-3" /> Social
-                    </a>
-                  )}
-                  {l.url && (
-                    <a
-                      href={l.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex items-center gap-1 hover:text-zinc-100"
-                    >
-                      <MapPin className="h-3 w-3" /> {l.address ?? "Map"}
-                    </a>
-                  )}
-                  <a
-                    href={`https://www.google.com/search?q=${encodeURIComponent(
-                      `${l.company} ${l.city ?? ""}`
-                    )}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="hover:text-zinc-100"
-                  >
-                    Check on Google ↗
-                  </a>
-                </div>
-
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <button
-                    onClick={() =>
-                      l.draft && !isOpen
-                        ? setOpenLead(l._id)
-                        : isOpen
-                          ? setOpenLead(null)
-                          : runAI(l._id, () => draftLead({ id }), setOpenLead)
-                    }
-                    disabled={isBusy}
-                    className="flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs hover:bg-zinc-800 disabled:opacity-50"
-                  >
-                    {isBusy ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : isOpen ? (
-                      <ChevronUp className="h-3 w-3" />
-                    ) : l.draft ? (
-                      <ChevronDown className="h-3 w-3" />
-                    ) : (
-                      <PenLine className="h-3 w-3" />
-                    )}
-                    {isBusy ? "Writing…" : isOpen ? "Hide message" : l.draft ? "View message" : "Draft message"}
-                  </button>
-                  {l.draft && (
-                    <button
-                      onClick={() => runAI(l._id, () => draftLead({ id }), setOpenLead)}
-                      disabled={isBusy}
-                      className="flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 disabled:opacity-50"
-                    >
-                      <RefreshCw className="h-3 w-3" /> Regenerate
-                    </button>
-                  )}
-                </div>
-
-                {isOpen && l.draft && (
-                  <DraftPanel lead={l} onContacted={() => markContacted({ id })} />
-                )}
-              </li>
-            );
-          })}
-        </ul>
-        <Pagination
-          current={leadsPaged.current}
-          pageCount={leadsPaged.pageCount}
-          from={leadsPaged.from}
-          to={leadsPaged.to}
-          total={tabLeads.length}
-          onChange={setLeadPage}
         />
       </section>
     </main>

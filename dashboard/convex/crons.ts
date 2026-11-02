@@ -6,6 +6,9 @@ const crons = cronJobs();
 // Every 30 min — un-stick any agent whose run died (e.g. computer slept mid-run)
 crons.interval("reset stuck agents", { minutes: 30 }, internal.agentStatus.resetStuck, {});
 
+// Every 3 hours — collect pain signals and analyze the backlog
+crons.interval("pain agent", { hours: 3 }, internal.painAgent.run, {});
+
 // 02:30 UTC = 07:30 PKT — archive stale items before the agents run
 crons.daily(
   "archive stale jobs and leads",
@@ -22,15 +25,7 @@ crons.daily(
   {}
 );
 
-// 03:30 UTC = 08:30 PKT
-crons.daily(
-  "lead agent morning run",
-  { hourUTC: 3, minuteUTC: 30 },
-  internal.leadAgent.run,
-  {}
-);
-
-// 04:00 UTC = 09:00 PKT — after both agents, so the briefing sees fresh results
+// 04:00 UTC = 09:00 PKT — daily briefing
 crons.daily(
   "daily briefing",
   { hourUTC: 4, minuteUTC: 0 },

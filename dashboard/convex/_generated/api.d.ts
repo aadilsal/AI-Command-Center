@@ -27,9 +27,13 @@ import type * as leads from "../leads.js";
 import type * as llm from "../llm.js";
 import type * as osm from "../osm.js";
 import type * as outreach from "../outreach.js";
+import type * as painAgent from "../painAgent.js";
+import type * as painSources from "../painSources.js";
 import type * as profile from "../profile.js";
+import type * as prompts from "../prompts.js";
 import type * as resumes from "../resumes.js";
 import type * as seed from "../seed.js";
+import type * as solutionDesigner from "../solutionDesigner.js";
 import type * as techversaProfile from "../techversaProfile.js";
 
 import type {
@@ -58,9 +62,13 @@ declare const fullApi: ApiFromModules<{
   llm: typeof llm;
   osm: typeof osm;
   outreach: typeof outreach;
+  painAgent: typeof painAgent;
+  painSources: typeof painSources;
   profile: typeof profile;
+  prompts: typeof prompts;
   resumes: typeof resumes;
   seed: typeof seed;
+  solutionDesigner: typeof solutionDesigner;
   techversaProfile: typeof techversaProfile;
 }>;
 

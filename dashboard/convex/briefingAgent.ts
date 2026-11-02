@@ -1,20 +1,26 @@
-import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { callLLMJson } from "./llm";
 
 const AGENT_NAME = "Briefing Agent";
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
-const NEW_WINDOW_MS = 36 * HOUR; // "new" = found in the last 36h
-const FOLLOW_UP_AFTER_MS = 3 * DAY; // Contacted with no reply for 3+ days
+const NEW_WINDOW_MS = 36 * HOUR;
+const JOB_FOLLOW_UP_AFTER_MS = 7 * DAY;
+const MIN_EVIDENCE_TO_DESIGN = 2;
 const MAX_ACTIONS = 5;
 
-type Kind = "job" | "lead" | "followup" | "system";
+type Kind = "job" | "opportunity" | "followup" | "system";
 type Action = { title: string; why: string; kind: Kind; url?: string };
 
-// Today's date in Pakistan time (UTC+5)
 const todayPKT = () => new Date(Date.now() + 5 * HOUR).toISOString().slice(0, 10);
+const problemLink = (id: string) => `#problem-${id}`; // jumps to the problem on the dashboard
+
+const setStatus = (
+  ctx: { runMutation: (...a: any[]) => Promise<any> },
+  args: { status: "running" | "idle"; lastRun?: number; lastError?: string | null }
+) => ctx.runMutation(internal.agentStatus.set, { name: AGENT_NAME, ...args });
 
 // ---------- Public ----------
 
@@ -25,7 +31,6 @@ export const runNow = mutation({
   },
 });
 
-// Latest briefing for the dashboard
 export const latest = query({
   args: {},
   handler: async (ctx) => {
@@ -33,14 +38,14 @@ export const latest = query({
   },
 });
 
-// ---------- Gather today's state (excludes anything you've already acted on) ----------
+// ---------- Gather today's state (only things you haven't acted on) ----------
 
 export const gather = internalQuery({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
     const jobs = (await ctx.db.query("jobs").collect()).filter((j) => j.source);
-    const leads = (await ctx.db.query("leads").collect()).filter((l) => l.source);
+    const problems = await ctx.db.query("problems").collect();
     const agents = await ctx.db.query("agents").collect();
 
     const savedJobs = jobs.filter((j) => j.status === "Saved");
@@ -49,68 +54,95 @@ export const gather = internalQuery({
       .filter((j) => j.recommendation === "Apply")
       .sort((a, b) => b.matchScore - a.matchScore);
 
-    const openLeads = leads.filter((l) => (l.status ?? "New") === "New");
-    const newLeads = openLeads.filter((l) => (l.foundAt ?? 0) >= now - NEW_WINDOW_MS);
-    const highLeads = openLeads
-      .filter((l) => l.priority === "High")
-      .sort((a, b) => (b.fitScore ?? 0) - (a.fitScore ?? 0));
-
-    const followUps = leads
+    const jobFollowUps = jobs
       .filter(
-        (l) =>
-          l.status === "Contacted" &&
-          l.statusChangedAt !== undefined &&
-          l.statusChangedAt < now - FOLLOW_UP_AFTER_MS
+        (j) =>
+          j.status === "Applied" &&
+          j.statusChangedAt !== undefined &&
+          j.statusChangedAt < now - JOB_FOLLOW_UP_AFTER_MS
       )
       .sort((a, b) => (a.statusChangedAt ?? 0) - (b.statusChangedAt ?? 0));
 
-    const agentErrors = agents.filter((a) => a.lastError && a.name !== AGENT_NAME);
+    const active = problems.filter((p) => p.status !== "Parked");
+    const newProblems = active.filter((p) => p.firstSeenAt >= now - NEW_WINDOW_MS);
+    const readyToDesign = active
+      .filter((p) => !p.solution && p.signalCount >= MIN_EVIDENCE_TO_DESIGN)
+      .sort((a, b) => b.score - a.score);
+    const designedToValidate = active
+      .filter((p) => p.solution && p.status === "Exploring")
+      .sort((a, b) => b.score - a.score);
+
+    const agentErrors = agents.filter(
+      (a) => a.lastError && a.name !== AGENT_NAME && a.status !== "disabled"
+    );
 
     return {
       stats: {
         newJobs: newJobs.length,
         applyJobs: applyJobs.length,
-        newLeads: newLeads.length,
-        highLeads: highLeads.length,
-        followUpsDue: followUps.length,
+        jobFollowUps: jobFollowUps.length,
+        newProblems: newProblems.length,
+        readyToDesign: readyToDesign.length,
         agentErrors: agentErrors.length,
       },
       topJobs: applyJobs.slice(0, 5).map((j) => ({
         title: j.title,
         company: j.company,
         score: j.matchScore,
-        reasons: (j.reasons ?? []).slice(0, 2),
+        hasKit: !!j.kit,
         url: j.url,
       })),
-      topLeads: highLeads.slice(0, 5).map((l) => ({
-        company: l.company,
-        industry: l.industry,
-        city: l.city ?? "",
-        score: l.fitScore ?? 0,
-        contact: [l.phone, l.email].filter(Boolean).join(" / "),
-        url: l.url ?? "",
+      jobFollowUps: jobFollowUps.slice(0, 3).map((j) => ({
+        title: j.title,
+        company: j.company,
+        daysSinceApplied: Math.floor((now - (j.statusChangedAt ?? now)) / DAY),
+        url: j.url,
       })),
-      followUps: followUps.slice(0, 5).map((l) => ({
-        company: l.company,
-        city: l.city ?? "",
-        daysSinceContact: Math.floor((now - (l.statusChangedAt ?? now)) / DAY),
-        contact: [l.phone, l.email].filter(Boolean).join(" / "),
-        url: l.url ?? "",
+      readyToDesign: readyToDesign.slice(0, 3).map((p) => ({
+        title: p.title,
+        score: p.score,
+        evidence: p.signalCount,
+        sources: p.sources.join(", "),
+        url: problemLink(p._id),
       })),
+      toValidate: designedToValidate.slice(0, 2).map((p) => ({
+        title: p.title,
+        product: p.solution!.name,
+        firstValidationStep: p.solution!.validationSteps[0] ?? "",
+        url: problemLink(p._id),
+      })),
+      newProblemTitles: newProblems.slice(0, 5).map((p) => p.title),
       errors: agentErrors.map((a) => ({ agent: a.name, error: (a.lastError ?? "").slice(0, 150) })),
     };
   },
 });
+
+type State = {
+  stats: {
+    newJobs: number;
+    applyJobs: number;
+    jobFollowUps: number;
+    newProblems: number;
+    readyToDesign: number;
+    agentErrors: number;
+  };
+  topJobs: { title: string; company: string; score: number; hasKit: boolean; url: string }[];
+  jobFollowUps: { title: string; company: string; daysSinceApplied: number; url: string }[];
+  readyToDesign: { title: string; score: number; evidence: number; sources: string; url: string }[];
+  toValidate: { title: string; product: string; firstValidationStep: string; url: string }[];
+  newProblemTitles: string[];
+  errors: { agent: string; error: string }[];
+};
 
 // ---------- The agent ----------
 
 export const run = internalAction({
   args: {},
   handler: async (ctx) => {
-    await ctx.runMutation(internal.agentStatus.set, { name: AGENT_NAME, status: "running" });
+    await setStatus(ctx, { status: "running" });
 
     try {
-      const state = await ctx.runQuery(internal.briefingAgent.gather, {});
+      const state = (await ctx.runQuery(internal.briefingAgent.gather, {})) as State;
 
       let headline: string;
       let actions: Action[];
@@ -132,22 +164,11 @@ export const run = internalAction({
         generatedBy,
       });
 
-      await ctx.runMutation(internal.agentStatus.set, {
-        name: AGENT_NAME,
-        status: "idle",
-        lastRun: Date.now(),
-        lastError: null,
-      });
-
+      await setStatus(ctx, { status: "idle", lastRun: Date.now(), lastError: null });
       return { date: todayPKT(), generatedBy, headline, actions: actions.length };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await ctx.runMutation(internal.agentStatus.set, {
-        name: AGENT_NAME,
-        status: "idle",
-        lastRun: Date.now(),
-        lastError: message,
-      });
+      await setStatus(ctx, { status: "idle", lastRun: Date.now(), lastError: message });
       throw err;
     }
   },
@@ -155,40 +176,30 @@ export const run = internalAction({
 
 // ---------- Writers ----------
 
-type State = Awaited<ReturnType<typeof gatherType>>;
-declare function gatherType(): Promise<{
-  stats: Record<string, number>;
-  topJobs: { title: string; company: string; score: number; reasons: string[]; url: string }[];
-  topLeads: { company: string; industry: string; city: string; score: number; contact: string; url: string }[];
-  followUps: { company: string; city: string; daysSinceContact: number; contact: string; url: string }[];
-  errors: { agent: string; error: string }[];
-}>;
-
 async function writeWithLLM(state: State): Promise<{ headline: string; actions: Action[] }> {
-  const system = `You are the chief of staff for Aadil, a software engineer in Lahore who is (1) looking for a better remote engineering job and (2) growing his services company TechVersa.
-Write his morning briefing from the data provided. Respond with ONLY a JSON object:
-{"headline": string (one sentence, specific numbers), "actions": [{"title": string, "why": string, "kind": "job"|"lead"|"followup"|"system", "url": string}]}
+  const system = `You are the chief of staff for Aadil, a software engineer in Lahore who is (1) looking for a better remote engineering job and (2) building products for his studio TechVersa based on real pain points his agents discover.
+Write his morning briefing from the data. Respond with ONLY a JSON object:
+{"headline": string (one sentence, specific numbers), "actions": [{"title": string, "why": string, "kind": "job"|"opportunity"|"followup"|"system", "url": string}]}
 Rules:
-- At most ${MAX_ACTIONS} actions, ordered by importance. Fewer is fine if there is little to do.
-- Priority order: overdue follow-ups (warm leads go cold) > strongest job applications > highest-fit new leads > fixing broken agents.
-- Every action must refer to a specific item from the data; copy its url exactly. Never invent companies, jobs, or urls.
-- title: an imperative, concrete action (e.g. "Apply to Senior Full Stack Engineer at Acme").
-- why: one short sentence with the specific reason (score, days since contact, etc.).
-- If there is nothing at all to act on, return a single "system" action suggesting to run the agents.`;
-
-  const user = `DATA:\n${JSON.stringify(state, null, 1)}`;
+- At most ${MAX_ACTIONS} actions, ordered by importance. Fewer is fine.
+- Priority: strongest job applications > job follow-ups > best opportunity to design (readyToDesign) or validate (toValidate) > fixing broken agents.
+- For a readyToDesign item, the action is to design a solution; for a toValidate item, the action is its first validation step.
+- Every action must refer to a specific item from the data; copy its url exactly. Never invent anything.
+- title: imperative and concrete. why: one short sentence with the specific reason (score, days, evidence count).
+- If there is nothing to act on, return one "system" action suggesting to run the agents.`;
 
   const { data } = await callLLMJson<{ headline?: string; actions?: Partial<Action>[] }>({
     system,
-    user,
+    user: `DATA:\n${JSON.stringify(state, null, 1)}`,
     maxTokens: 2500,
   });
 
-  // Only keep actions that point at real items we gave it
   const validUrls = new Set(
-    [...state.topJobs, ...state.topLeads, ...state.followUps].map((x) => x.url).filter(Boolean)
+    [...state.topJobs, ...state.jobFollowUps, ...state.readyToDesign, ...state.toValidate]
+      .map((x) => x.url)
+      .filter(Boolean)
   );
-  const kinds: Kind[] = ["job", "lead", "followup", "system"];
+  const kinds: Kind[] = ["job", "opportunity", "followup", "system"];
 
   const actions: Action[] = (data.actions ?? [])
     .filter((a) => a && a.title && a.why && kinds.includes(a.kind as Kind))
@@ -208,28 +219,31 @@ Rules:
 function writeWithRules(state: State): { headline: string; actions: Action[] } {
   const actions: Action[] = [];
 
-  for (const f of state.followUps.slice(0, 2)) {
+  for (const j of state.topJobs.slice(0, 2)) {
+    actions.push({ kind: "job", title: `Apply to ${j.title} at ${j.company}`, why: `${j.score}% match.`, url: j.url });
+  }
+  for (const f of state.jobFollowUps.slice(0, 1)) {
     actions.push({
       kind: "followup",
-      title: `Follow up with ${f.company}${f.city ? ` (${f.city})` : ""}`,
-      why: `Contacted ${f.daysSinceContact} days ago with no reply.`,
+      title: `Follow up on ${f.title} at ${f.company}`,
+      why: `Applied ${f.daysSinceApplied} days ago with no movement.`,
       url: f.url,
     });
   }
-  for (const j of state.topJobs.slice(0, 2)) {
+  for (const p of state.readyToDesign.slice(0, 1)) {
     actions.push({
-      kind: "job",
-      title: `Apply to ${j.title} at ${j.company}`,
-      why: `${j.score}% match.`,
-      url: j.url,
+      kind: "opportunity",
+      title: `Design a solution for: ${p.title}`,
+      why: `Score ${p.score}, ${p.evidence} pieces of evidence (${p.sources}).`,
+      url: p.url,
     });
   }
-  for (const l of state.topLeads.slice(0, 2)) {
+  for (const p of state.toValidate.slice(0, 1)) {
     actions.push({
-      kind: "lead",
-      title: `Contact ${l.company}${l.city ? ` in ${l.city}` : ""}`,
-      why: `${l.industry}, fit score ${l.score}.`,
-      url: l.url,
+      kind: "opportunity",
+      title: `Validate ${p.product}: ${p.firstValidationStep}`.slice(0, 160),
+      why: `Designed for "${p.title}" — test demand before building.`,
+      url: p.url,
     });
   }
   for (const e of state.errors.slice(0, 1)) {
@@ -238,7 +252,7 @@ function writeWithRules(state: State): { headline: string; actions: Action[] } {
 
   const s = state.stats;
   return {
-    headline: `${s.applyJobs} jobs worth applying to, ${s.highLeads} high-priority leads, ${s.followUpsDue} follow-ups due.`,
+    headline: `${s.applyJobs} jobs worth applying to, ${s.readyToDesign} opportunities ready to design, ${s.newProblems} new problems found.`,
     actions: actions.slice(0, MAX_ACTIONS),
   };
 }
@@ -253,16 +267,16 @@ export const save = internalMutation({
       v.object({
         title: v.string(),
         why: v.string(),
-        kind: v.union(v.literal("job"), v.literal("lead"), v.literal("followup"), v.literal("system")),
+        kind: v.union(v.literal("job"), v.literal("opportunity"), v.literal("followup"), v.literal("system")),
         url: v.optional(v.string()),
       })
     ),
     stats: v.object({
       newJobs: v.number(),
       applyJobs: v.number(),
-      newLeads: v.number(),
-      highLeads: v.number(),
-      followUpsDue: v.number(),
+      jobFollowUps: v.number(),
+      newProblems: v.number(),
+      readyToDesign: v.number(),
       agentErrors: v.number(),
     }),
     generatedBy: v.union(v.literal("llm"), v.literal("rules")),
