@@ -133,6 +133,7 @@ export default defineSchema({
       v.literal("idle"),
       v.literal("disabled")
     ),
+    startedAt: v.optional(v.number()), // when the current/last run began (watchdog uses this)
     lastRun: v.optional(v.number()),
     lastError: v.optional(v.string()),
   }).index("by_name", ["name"]),

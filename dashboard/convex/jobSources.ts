@@ -136,45 +136,68 @@ async function fromJobicy(): Promise<NormalizedJob[]> {
 }
 
 // ---------- Himalayas (free public API; credit Himalayas when displaying) ----------
-const HIMALAYAS_PAGES = 5; // 20 jobs per page
+const HIMALAYAS_QUERIES = ["full stack", "backend", "frontend", "react", "node.js"];
+const HIMALAYAS_BROWSE_PAGES = 5; // fallback only
 const OPEN_TO_PAKISTAN = /pakistan|asia|worldwide|anywhere|global/i;
 
+function himalayasJob(j: any): NormalizedJob | null {
+  const restrictions: string[] = Array.isArray(j.locationRestrictions)
+    ? j.locationRestrictions.map((r: any) => (typeof r === "string" ? r : r?.name ?? "")).filter(Boolean)
+    : [];
+
+  // Skip jobs that explicitly exclude Pakistan, before any LLM tokens are spent
+  if (restrictions.length && !restrictions.some((r) => OPEN_TO_PAKISTAN.test(r))) return null;
+
+  const url = j.guid || j.applicationLink;
+  if (!url || !j.title) return null;
+
+  return {
+    url,
+    title: j.title,
+    company: j.companyName || "Unknown",
+    location: restrictions.length ? restrictions.join(", ") : "Worldwide",
+    salary: j.minSalary && j.maxSalary ? `${j.currency ?? "USD"} ${j.minSalary} - ${j.maxSalary}` : "",
+    description: cleanDescription(j.description || j.excerpt),
+    source: "Himalayas",
+    postedAt: toMs(j.pubDate),
+  };
+}
+
 async function fromHimalayas(): Promise<NormalizedJob[]> {
-  const jobs: NormalizedJob[] = [];
-  for (let page = 0; page < HIMALAYAS_PAGES; page++) {
-    const data = await getJson(`https://himalayas.app/jobs/api?limit=20&offset=${page * 20}`);
-    const list: any[] = data.jobs ?? [];
+  const found = new Map<string, NormalizedJob>();
+  let searchWorked = false;
 
-    for (const j of list) {
-      const restrictions: string[] = Array.isArray(j.locationRestrictions)
-        ? j.locationRestrictions.map((r: any) => (typeof r === "string" ? r : r?.name ?? "")).filter(Boolean)
-        : [];
-
-      // Skip jobs that explicitly exclude Pakistan, before any LLM tokens are spent
-      if (restrictions.length && !restrictions.some((r) => OPEN_TO_PAKISTAN.test(r))) continue;
-
-      const url = j.guid || j.applicationLink;
-      if (!url || !j.title) continue;
-
-      jobs.push({
-        url,
-        title: j.title,
-        company: j.companyName || "Unknown",
-        location: restrictions.length ? restrictions.join(", ") : "Worldwide",
-        salary:
-          j.minSalary && j.maxSalary
-            ? `${j.currency ?? "USD"} ${j.minSalary} - ${j.maxSalary}`
-            : "",
-        description: cleanDescription(j.description || j.excerpt),
-        source: "Himalayas",
-        postedAt: toMs(j.pubDate),
-      });
+  // Keyword search: engineering roles only
+  for (const q of HIMALAYAS_QUERIES) {
+    try {
+      const enc = encodeURIComponent(q);
+      const data = await getJson(`https://himalayas.app/jobs/api/search?q=${enc}&keyword=${enc}`);
+      searchWorked = true;
+      for (const raw of data.jobs ?? []) {
+        const job = himalayasJob(raw);
+        if (job && !found.has(job.url)) found.set(job.url, job);
+      }
+    } catch {
+      /* try the next keyword */
     }
-
-    if (list.length < 20) break;
     await sleep(1000); // keep usage reasonable
   }
-  return jobs;
+
+  // Fallback: general feed, if search is unavailable
+  if (!searchWorked) {
+    for (let page = 0; page < HIMALAYAS_BROWSE_PAGES; page++) {
+      const data = await getJson(`https://himalayas.app/jobs/api?limit=20&offset=${page * 20}`);
+      const list: any[] = data.jobs ?? [];
+      for (const raw of list) {
+        const job = himalayasJob(raw);
+        if (job && !found.has(job.url)) found.set(job.url, job);
+      }
+      if (list.length < 20) break;
+      await sleep(1000);
+    }
+  }
+
+  return [...found.values()];
 }
 
 // ---------- We Work Remotely (free RSS feeds) ----------

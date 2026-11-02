@@ -1,6 +1,9 @@
 import { v } from "convex/values";
 import { internalMutation } from "./_generated/server";
 
+const STUCK_AFTER_MS = 12 * 60 * 1000; // Convex kills runs at 10 min, so 12+ means it died
+
+// Shared status updater for every agent
 export const set = internalMutation({
   args: {
     name: v.string(),
@@ -14,10 +17,13 @@ export const set = internalMutation({
       .withIndex("by_name", (q) => q.eq("name", name))
       .first();
 
+    const startedAt = status === "running" ? { startedAt: Date.now() } : {};
+
     if (!agent) {
       await ctx.db.insert("agents", {
         name,
         status,
+        ...startedAt,
         ...(lastRun !== undefined && { lastRun }),
         ...(typeof lastError === "string" && { lastError }),
       });
@@ -26,8 +32,28 @@ export const set = internalMutation({
 
     await ctx.db.patch(agent._id, {
       status,
+      ...startedAt,
       ...(lastRun !== undefined && { lastRun }),
       ...(lastError !== undefined && { lastError: lastError ?? undefined }),
     });
+  },
+});
+
+// Watchdog (runs every 30 min): un-stick agents whose run died mid-way
+export const resetStuck = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    let reset = 0;
+    for (const agent of await ctx.db.query("agents").collect()) {
+      if (agent.status !== "running") continue;
+      if (agent.startedAt && now - agent.startedAt < STUCK_AFTER_MS) continue; // still legitimately running
+      await ctx.db.patch(agent._id, {
+        status: "idle",
+        lastError: "Run was interrupted (computer asleep or run timed out) — will run again on schedule",
+      });
+      reset++;
+    }
+    return { reset };
   },
 });

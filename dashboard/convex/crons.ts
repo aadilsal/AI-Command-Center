@@ -3,6 +3,9 @@ import { internal } from "./_generated/api";
 
 const crons = cronJobs();
 
+// Every 30 min — un-stick any agent whose run died (e.g. computer slept mid-run)
+crons.interval("reset stuck agents", { minutes: 30 }, internal.agentStatus.resetStuck, {});
+
 // 02:30 UTC = 07:30 PKT — archive stale items before the agents run
 crons.daily(
   "archive stale jobs and leads",

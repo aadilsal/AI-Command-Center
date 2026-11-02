@@ -8,10 +8,16 @@ const AGENT_NAME = "Lead Agent";
 const TARGETS_PER_RUN = 4;
 const MAX_NEW_LEADS_PER_RUN = 60;
 const GEOCODE_PAUSE_MS = 1500; // Nominatim policy: max 1 request/second
-const OVERPASS_PAUSE_MS = 5000; // be polite to the free Overpass server
+const TARGET_PAUSE_MS = 5000;
+const RUN_BUDGET_MS = 8 * 60 * 1000; // stop cleanly before Convex's 10-minute limit
 
 const priorityFor = (score: number): "High" | "Medium" | "Low" =>
   score >= 75 ? "High" : score >= 60 ? "Medium" : "Low";
+
+const setStatus = (
+  ctx: { runMutation: (...a: any[]) => Promise<any> },
+  args: { status: "running" | "idle"; lastRun?: number; lastError?: string | null }
+) => ctx.runMutation(internal.agentStatus.set, { name: AGENT_NAME, ...args });
 
 // ---------- Public trigger (dashboard "Run now" button) ----------
 
@@ -27,7 +33,8 @@ export const runNow = mutation({
 export const run = internalAction({
   args: {},
   handler: async (ctx) => {
-    await ctx.runMutation(internal.leadAgent.setAgentStatus, { status: "running" });
+    const startedAt = Date.now();
+    await setStatus(ctx, { status: "running" });
 
     try {
       const targets = await ctx.runQuery(internal.leadTargets.nextToScan, {
@@ -44,14 +51,19 @@ export const run = internalAction({
         error?: string;
       }[] = [];
       let totalSaved = 0;
+      let stoppedEarly = false;
 
       for (let i = 0; i < targets.length; i++) {
+        if (Date.now() - startedAt > RUN_BUDGET_MS) {
+          stoppedEarly = true;
+          break;
+        }
         const t = targets[i];
         const category = CATEGORIES[t.category];
         const cityName = t.city.split(",")[0].trim();
         const label = `${cityName} — ${category.label}`;
 
-        if (i > 0) await sleep(OVERPASS_PAUSE_MS);
+        if (i > 0) await sleep(TARGET_PAUSE_MS);
 
         try {
           // 1. City bounding box (cached on the row after the first lookup)
@@ -63,7 +75,7 @@ export const run = internalAction({
             await ctx.runMutation(internal.leadTargets.cacheBbox, { city: t.city, bbox });
           }
 
-          // 2. All businesses of this type in the city
+          // 2. All named businesses of this type in the city
           const businesses = await findBusinesses(bbox, t.category);
 
           // 3. The gap: reachable by phone, but no website
@@ -131,7 +143,7 @@ export const run = internalAction({
       // 5. Report status to the dashboard
       const failedTargets = report.filter((r) => r.error);
       let lastError: string | null = null;
-      if (failedTargets.length === report.length) {
+      if (report.length > 0 && failedTargets.length === report.length) {
         lastError = `All targets failed: ${failedTargets[0]?.error}`;
       } else if (failedTargets.length > 0) {
         lastError = `${failedTargets.length} target(s) failed: ${failedTargets
@@ -139,20 +151,17 @@ export const run = internalAction({
           .join(", ")} — will retry`;
       }
 
-      await ctx.runMutation(internal.leadAgent.setAgentStatus, {
-        status: "idle",
-        lastRun: Date.now(),
-        lastError,
-      });
+      await setStatus(ctx, { status: "idle", lastRun: Date.now(), lastError });
 
-      return { targets: report, saved: totalSaved };
+      return {
+        targets: report,
+        saved: totalSaved,
+        ...(stoppedEarly && { stoppedEarly: true }),
+        seconds: Math.round((Date.now() - startedAt) / 1000),
+      };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await ctx.runMutation(internal.leadAgent.setAgentStatus, {
-        status: "idle",
-        lastRun: Date.now(),
-        lastError: message,
-      });
+      await setStatus(ctx, { status: "idle", lastRun: Date.now(), lastError: message });
       throw err;
     }
   },
@@ -204,36 +213,6 @@ export const saveLead = internalMutation({
       ...args,
       status: "New",
       foundAt: Date.now(),
-    });
-  },
-});
-
-export const setAgentStatus = internalMutation({
-  args: {
-    status: v.union(v.literal("running"), v.literal("idle"), v.literal("disabled")),
-    lastRun: v.optional(v.number()),
-    lastError: v.optional(v.union(v.string(), v.null())), // null = clear
-  },
-  handler: async (ctx, { status, lastRun, lastError }) => {
-    const agent = await ctx.db
-      .query("agents")
-      .withIndex("by_name", (q) => q.eq("name", AGENT_NAME))
-      .first();
-
-    if (!agent) {
-      await ctx.db.insert("agents", {
-        name: AGENT_NAME,
-        status,
-        ...(lastRun !== undefined && { lastRun }),
-        ...(typeof lastError === "string" && { lastError }),
-      });
-      return;
-    }
-
-    await ctx.db.patch(agent._id, {
-      status,
-      ...(lastRun !== undefined && { lastRun }),
-      ...(lastError !== undefined && { lastError: lastError ?? undefined }),
     });
   },
 });
