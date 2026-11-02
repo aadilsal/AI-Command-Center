@@ -24,7 +24,7 @@ Every morning, without me touching anything:
 | Time (PKT) | Agent | What it does |
 |---|---|---|
 | 07:30 | **Cleanup** | Archives stale jobs and untouched leads so the dashboard stays focused |
-| 08:00 | **Career Agent** | Pulls ~180 remote jobs from 4 job boards, filters for relevant roles, skips anything already seen, and has an LLM score each one against my profile (match %, reasons, missing skills, Apply / Maybe / Skip) |
+| 08:00 | **Career Agent** | Pulls remote jobs from 5 free-to-apply sources, filters for relevant roles, skips anything already seen, and has an LLM score each one against my profile (match %, reasons, missing skills, Apply / Maybe / Skip) |
 | 08:30 | **Lead Agent** | Scans target cities for small businesses (clinics, dentists, salons, agencies…) that are reachable by phone but have no website or online booking, and turns each into a qualified lead with the business pain and the solution we'd offer |
 | 09:00 | **Briefing Agent** | Reads everything the other agents found and writes a short briefing: a headline and the 3–5 most important actions for today, ranked (follow-ups before new opportunities) |
 
@@ -38,7 +38,7 @@ Then I open one page and know:
 ## Features
 
 **Career**
-- Multi-source job discovery (Remotive, Arbeitnow, RemoteOK, Jobicy) with cross-board de-duplication
+- Multi-source job discovery from free-to-apply sources (Remotive, Arbeitnow, Jobicy, Himalayas, Hacker News "Who is hiring") with cross-board de-duplication
 - LLM job scoring against my profile, including location eligibility (a "remote" role that is US-only is marked Skip)
 - One-click **Apply**: opens the posting and marks it Applied, so it never shows up again
 - Application tracker: Saved → Applied → Interview → Offer / Rejected
@@ -66,7 +66,7 @@ Then I open one page and know:
 ~~~mermaid
 flowchart LR
     subgraph Sources["External sources (free)"]
-        JB["Job boards<br/>Remotive · Arbeitnow<br/>RemoteOK · Jobicy"]
+        JB["Job boards<br/>Remotive · Arbeitnow · Jobicy<br/>Himalayas · HN Who is hiring"]
         OSM["OpenStreetMap<br/>(Nominatim)"]
     end
 
@@ -170,8 +170,7 @@ To make it your own, edit `convex/profile.ts` (your skills and preferences) and 
 - [x] Lead Agent with configurable city and business-type targets
 - [x] Daily briefing with prioritized actions
 - [x] AI outreach drafts for leads
-- [ ] Tailored CV, cover letter, and application email per job
-- [ ] Briefing delivered to my phone (Telegram)
+- [x] Tailored CV, cover letter, and application email per job
 - [ ] Proposal generator for leads that reply
 - [ ] Weekly review: applications, reply rates, what to change
 - [ ] Authentication and cloud deployment
