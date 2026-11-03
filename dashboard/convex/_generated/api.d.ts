@@ -13,6 +13,7 @@ import type * as applicationKit from "../applicationKit.js";
 import type * as briefingAgent from "../briefingAgent.js";
 import type * as careerAgent from "../careerAgent.js";
 import type * as cleanup from "../cleanup.js";
+import type * as counters from "../counters.js";
 import type * as crons from "../crons.js";
 import type * as dashboard from "../dashboard.js";
 import type * as jobCrm from "../jobCrm.js";
@@ -48,6 +49,7 @@ declare const fullApi: ApiFromModules<{
   briefingAgent: typeof briefingAgent;
   careerAgent: typeof careerAgent;
   cleanup: typeof cleanup;
+  counters: typeof counters;
   crons: typeof crons;
   dashboard: typeof dashboard;
   jobCrm: typeof jobCrm;

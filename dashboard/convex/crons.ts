@@ -6,8 +6,8 @@ const crons = cronJobs();
 // Every 30 min — un-stick any agent whose run died (e.g. computer slept mid-run)
 crons.interval("reset stuck agents", { minutes: 30 }, internal.agentStatus.resetStuck, {});
 
-// Every 3 hours — collect pain signals and analyze the backlog
-crons.interval("pain agent", { hours: 3 }, internal.painAgent.run, {});
+// Every 6 hours — collect pain signals and analyze the backlog (stays inside Groq's free daily quota)
+crons.interval("pain agent", { hours: 6 }, internal.painAgent.run, {});
 
 // 02:30 UTC = 07:30 PKT — archive stale items before the agents run
 crons.daily(

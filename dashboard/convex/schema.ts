@@ -174,6 +174,12 @@ export default defineSchema({
 
   // ---------------------------------------------------------------- System
 
+  // Cheap running totals (e.g. "pendingSignals") so the dashboard never scans big tables
+  counters: defineTable({
+    key: v.string(),
+    value: v.number(),
+  }).index("by_key", ["key"]),
+
   briefings: defineTable({
     date: v.string(),
     createdAt: v.number(),

@@ -1,12 +1,13 @@
 // Shared LLM helper for all agents (Groq, OpenAI-compatible API).
-// Handles: auth, rate limits (429), empty/truncated replies, JSON parsing, and retries.
+// Handles: auth, rate limits, daily quota, empty/truncated replies, JSON parsing, retries.
 
 export const LLM_MODEL = "openai/gpt-oss-20b";
 const LLM_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const MAX_RATE_LIMIT_RETRIES = 3;
-const MAX_BAD_OUTPUT_RETRIES = 2; // empty / truncated / unparseable replies
+const MAX_BAD_OUTPUT_RETRIES = 2;
 const MAX_TOKENS_CAP = 8000;
+const MAX_WAIT_SECONDS = 90; // longer than this = quota exhausted, don't sleep on it
 
 // Groq free tier is ~8k tokens/min, so agents pause this long between calls.
 export const LLM_PACING_MS = 6000;
@@ -21,9 +22,11 @@ export class RateLimitError extends Error {
   }
 }
 
+// Daily (or long) quota exhausted: retrying now is pointless — stop the run.
+export class QuotaExhaustedError extends Error {}
+
 class BadOutputError extends Error {}
 
-// Optional request features. If Groq rejects one, we turn it off and carry on.
 const features = { reasoningEffort: true, jsonMode: true };
 
 type CallOptions = {
@@ -32,6 +35,17 @@ type CallOptions = {
   maxTokens?: number;
   temperature?: number;
 };
+
+/** Parses "try again in 7.3s", "2m30.5s", "1h5m" into seconds. */
+function parseWaitSeconds(text: string, header: string | null): number {
+  const fromHeader = Number(header);
+  if (Number.isFinite(fromHeader) && fromHeader > 0) return fromHeader;
+  const m = text.match(/try again in\s+(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:([\d.]+)s)?/i);
+  if (m && (m[1] || m[2] || m[3])) {
+    return Number(m[1] ?? 0) * 3600 + Number(m[2] ?? 0) * 60 + Number(m[3] ?? 0);
+  }
+  return 10;
+}
 
 async function callOnce(opts: CallOptions, maxTokens: number): Promise<string> {
   const apiKey = process.env.GROQ_API_KEY;
@@ -46,7 +60,7 @@ async function callOnce(opts: CallOptions, maxTokens: number): Promise<string> {
       { role: "user", content: opts.user },
     ],
   };
-  if (features.reasoningEffort) body.reasoning_effort = "low"; // think briefly, leave tokens for the answer
+  if (features.reasoningEffort) body.reasoning_effort = "low";
   if (features.jsonMode) body.response_format = { type: "json_object" };
 
   const res = await fetch(LLM_URL, {
@@ -60,20 +74,19 @@ async function callOnce(opts: CallOptions, maxTokens: number): Promise<string> {
 
   if (res.status === 429) {
     const text = await res.text();
-    const header = Number(res.headers.get("retry-after"));
-    const fromMessage = Number(text.match(/try again in ([\d.]+)s/)?.[1]);
-    const seconds =
-      Number.isFinite(header) && header > 0
-        ? header
-        : Number.isFinite(fromMessage) && fromMessage > 0
-          ? fromMessage
-          : 10;
+    const seconds = parseWaitSeconds(text, res.headers.get("retry-after"));
+    const isDaily = /per day|\bTPD\b|\bRPD\b/i.test(text);
+    if (isDaily || seconds > MAX_WAIT_SECONDS) {
+      const mins = Math.ceil(seconds / 60);
+      throw new QuotaExhaustedError(
+        `Groq ${isDaily ? "daily " : ""}limit reached — resumes in ~${mins} min`
+      );
+    }
     throw new RateLimitError(`Groq rate limit: ${text.slice(0, 200)}`, (seconds + 1) * 1000);
   }
 
   if (res.status === 400) {
     const text = await res.text();
-    // An optional feature isn't supported: switch it off and retry immediately
     if (features.reasoningEffort && /reasoning_effort/i.test(text)) {
       features.reasoningEffort = false;
       return callOnce(opts, maxTokens);
@@ -82,7 +95,6 @@ async function callOnce(opts: CallOptions, maxTokens: number): Promise<string> {
       features.jsonMode = false;
       return callOnce(opts, maxTokens);
     }
-    // JSON mode can reject output it can't validate — treat as bad output and retry
     if (/json_validate_failed|failed to generate json/i.test(text)) {
       throw new BadOutputError("model produced invalid JSON");
     }
@@ -111,8 +123,7 @@ async function callOnce(opts: CallOptions, maxTokens: number): Promise<string> {
 
 /**
  * Call the LLM and parse a JSON object from its reply.
- * Retries on rate limits (waiting as told), and on empty/truncated/invalid
- * replies (with a bigger token budget each time).
+ * Retries short rate limits and bad output; throws QuotaExhaustedError immediately on daily limits.
  */
 export async function callLLMJson<T>(
   opts: CallOptions
@@ -150,7 +161,7 @@ export async function callLLMJson<T>(
           `The AI model didn't return a usable answer after ${badRetries + 1} tries (${err.message || lastProblem}). Try again in a minute.`
         );
       }
-      throw err;
+      throw err; // includes QuotaExhaustedError — callers stop their run
     }
   }
 }

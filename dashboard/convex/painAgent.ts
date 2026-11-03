@@ -3,16 +3,20 @@ import { internalAction, internalMutation, internalQuery, mutation } from "./_ge
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { fetchAllSignals } from "./painSources";
-import { callLLMJson, LLM_PACING_MS, sleep } from "./llm";
+import { callLLMJson, LLM_PACING_MS, QuotaExhaustedError, sleep } from "./llm";
 import { PAIN_ANALYST_SYSTEM } from "./prompts";
+import { addToCounter, getCounter } from "./counters";
 
 const AGENT_NAME = "Pain Agent";
-const MAX_ANALYZE_PER_RUN = 20;
+const MAX_LLM_PER_RUN = 15; // LLM analyses per run (keeps us inside Groq's free daily quota)
+const MAX_CONSIDER_PER_RUN = 60; // signals looked at per run (free pre-filter handles many)
 const RUN_BUDGET_MS = 8 * 60 * 1000;
-const CATALOG_SIZE = 60;
+const CATALOG_SIZE = 40;
 const POST_CHARS = 1500;
 const EVIDENCE_KEEP = 6;
+const PENDING_SCAN_LIMIT = 300;
 const DAY = 24 * 60 * 60 * 1000;
+const PENDING_KEY = "pendingSignals";
 
 type Extraction = {
   isPain: boolean;
@@ -36,6 +40,19 @@ const setStatus = (
 
 const clamp15 = (n: unknown) => Math.max(1, Math.min(5, Math.round(Number(n) || 1)));
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+
+// ---------- Free pre-filter (no LLM tokens) ----------
+// App Store reviews that are clearly vendor issues and contain no feature-gap language.
+const VENDOR_ISSUE =
+  /\b(refund|charged|charge(s|d)? me|billing|bill(ed)?|cancel(l?ed|l?ing|lation)?|subscription|log ?in|password|locked out|crash(es|ed|ing)?|bug(gy|s)?|glitch|won'?t (load|open)|not working|customer (service|support)|support (team|staff)|scam|fraud|hold(s|ing)? (my|our) (money|funds|payments?)|deposit|payout)\b/i;
+const FEATURE_GAP =
+  /\b(wish|missing|lacks?|no way to|doesn'?t (have|let|allow|support)|would be (nice|great)|need(s|ed)? (a|an|to)|just want|only (need|use)|too (complicated|complex|expensive) for)\b/i;
+
+function isObviousVendorIssue(s: Doc<"painSignals">): boolean {
+  if (!s.source.startsWith("App Store")) return false;
+  const text = `${s.title}\n${s.text}`;
+  return VENDOR_ISSUE.test(text) && !FEATURE_GAP.test(text);
+}
 
 // Opportunity score (0-100). Quality factors scaled by confidence: one mention ≈ half credit.
 function scoreProblem(p: {
@@ -68,47 +85,59 @@ export const run = internalAction({
   handler: async (ctx) => {
     const startedAt = Date.now();
 
-    // Never run two copies at once (scheduled + manual would share the rate limit)
     const claimed = await ctx.runMutation(internal.agentStatus.tryStart, { name: AGENT_NAME });
     if (!claimed) return { skipped: "Another Pain Agent run is already in progress" };
 
     try {
-      // 1. Collect raw signals (no LLM)
+      // 1. Collect raw signals (no LLM), inserted in batches
       const results = await fetchAllSignals();
       const sourceErrors = results.filter((r) => r.error).map((r) => `${r.source}: ${r.error}`);
       const all = results.flatMap((r) => r.signals);
 
-      const collected = all.length
-        ? await ctx.runMutation(internal.painAgent.insertSignals, {
-            signals: all.map((s) => ({
-              url: s.url,
-              source: s.source,
-              title: s.title.slice(0, 300),
-              text: s.text,
-              postedAt: s.postedAt,
-              engagement: s.engagement,
-            })),
-          })
-        : 0;
+      let collected = 0;
+      for (let i = 0; i < all.length; i += 50) {
+        collected += await ctx.runMutation(internal.painAgent.insertSignals, {
+          signals: all.slice(i, i + 50).map((s) => ({
+            url: s.url,
+            source: s.source,
+            title: s.title.slice(0, 300),
+            text: s.text,
+            postedAt: s.postedAt,
+            engagement: s.engagement,
+          })),
+        });
+      }
 
-      // 2. Analyze pending signals, taking turns across sources
-      const pending = await ctx.runQuery(internal.painAgent.nextPending, { limit: MAX_ANALYZE_PER_RUN });
+      // 2. Work through pending signals: free pre-filter first, then the LLM
+      const pending = await ctx.runQuery(internal.painAgent.nextPending, { limit: MAX_CONSIDER_PER_RUN });
 
+      let prefiltered = 0;
       let realPains = 0;
       let noise = 0;
       let newProblems = 0;
       let failed = 0;
+      let llmCalls = 0;
       let stoppedEarly = false;
+      let quotaMessage: string | null = null;
       let lastFailure: string | null = null;
 
-      for (let i = 0; i < pending.length; i++) {
+      for (const signal of pending) {
         if (Date.now() - startedAt > RUN_BUDGET_MS) {
           stoppedEarly = true;
           break;
         }
-        if (i > 0) await sleep(LLM_PACING_MS);
 
-        const signal = pending[i];
+        // Free: obvious vendor complaints never reach the LLM
+        if (isObviousVendorIssue(signal)) {
+          await ctx.runMutation(internal.painAgent.markNoise, { id: signal._id });
+          prefiltered++;
+          continue;
+        }
+
+        if (llmCalls >= MAX_LLM_PER_RUN) break;
+        if (llmCalls > 0) await sleep(LLM_PACING_MS);
+        llmCalls++;
+
         try {
           const catalog = await ctx.runQuery(internal.painAgent.problemCatalog, { limit: CATALOG_SIZE });
           const x = await analyzeSignal(signal, catalog);
@@ -141,6 +170,10 @@ export const run = internalAction({
           realPains++;
           if (created) newProblems++;
         } catch (err) {
+          if (err instanceof QuotaExhaustedError) {
+            quotaMessage = err.message; // stop now; the next scheduled run continues
+            break;
+          }
           failed++;
           lastFailure = err instanceof Error ? err.message : String(err);
           console.error(`Failed to analyze ${signal.url}:`, lastFailure.slice(0, 300));
@@ -149,8 +182,10 @@ export const run = internalAction({
 
       // 3. Report
       let lastError: string | null = null;
-      if (pending.length > 0 && realPains + noise === 0 && !stoppedEarly) {
-        lastError = `All ${pending.length} analyses failed: ${lastFailure?.slice(0, 200)}`;
+      if (quotaMessage) {
+        lastError = quotaMessage;
+      } else if (llmCalls > 0 && realPains + noise === 0 && !stoppedEarly) {
+        lastError = `All ${llmCalls} analyses failed: ${lastFailure?.slice(0, 200)}`;
       } else if (sourceErrors.length) {
         lastError = `Source issues — ${sourceErrors.join("; ")}`;
       } else if (failed > 0) {
@@ -167,12 +202,14 @@ export const run = internalAction({
           ...(r.error && { error: r.error }),
         })),
         newSignalsCollected: collected,
-        analyzed: realPains + noise,
+        prefilteredAsNoise: prefiltered,
+        llmCalls,
         realPains,
         noise,
         newProblems,
         failed,
         stillPending,
+        ...(quotaMessage && { stoppedByQuota: quotaMessage }),
         ...(stoppedEarly && { stoppedEarly: true }),
         seconds: Math.round((Date.now() - startedAt) / 1000),
       };
@@ -254,18 +291,20 @@ export const insertSignals = internalMutation({
       await ctx.db.insert("painSignals", { ...s, fetchedAt: Date.now(), status: "pending" });
       inserted++;
     }
+    await addToCounter(ctx, PENDING_KEY, inserted);
     return inserted;
   },
 });
 
-// Round-robin across sources (and each App Store app), best engagement first within each
+// Round-robin across sources (and each App Store app), best engagement first within each.
+// Reads at most PENDING_SCAN_LIMIT rows so the query stays fast as the backlog grows.
 export const nextPending = internalQuery({
   args: { limit: v.number() },
   handler: async (ctx, { limit }) => {
     const pending = await ctx.db
       .query("painSignals")
       .withIndex("by_status", (q) => q.eq("status", "pending"))
-      .collect();
+      .take(PENDING_SCAN_LIMIT);
 
     const buckets = new Map<string, Doc<"painSignals">[]>();
     for (const s of pending) {
@@ -290,11 +329,7 @@ export const nextPending = internalQuery({
 
 export const pendingCount = internalQuery({
   args: {},
-  handler: async (ctx) =>
-    (await ctx.db
-      .query("painSignals")
-      .withIndex("by_status", (q) => q.eq("status", "pending"))
-      .collect()).length,
+  handler: async (ctx) => getCounter(ctx, PENDING_KEY),
 });
 
 export const problemCatalog = internalQuery({
@@ -309,7 +344,10 @@ export const problemCatalog = internalQuery({
 export const markNoise = internalMutation({
   args: { id: v.id("painSignals") },
   handler: async (ctx, { id }) => {
+    const s = await ctx.db.get(id);
+    if (!s || s.status !== "pending") return;
     await ctx.db.patch(id, { status: "noise" });
+    await addToCounter(ctx, PENDING_KEY, -1);
   },
 });
 
@@ -335,6 +373,7 @@ export const applyAnalysis = internalMutation({
   handler: async (ctx, { signalId, problemId, newTitle, newSummary, extraction }) => {
     const signal = await ctx.db.get(signalId);
     if (!signal) return false;
+    const wasPending = signal.status === "pending";
 
     let pid = problemId;
     let created = false;
@@ -362,6 +401,7 @@ export const applyAnalysis = internalMutation({
     }
 
     await ctx.db.patch(signalId, { status: "analyzed", problemId: pid, extraction });
+    if (wasPending) await addToCounter(ctx, PENDING_KEY, -1);
 
     const linked = await ctx.db
       .query("painSignals")
@@ -397,7 +437,7 @@ export const applyAnalysis = internalMutation({
 });
 
 // One-time reset after changing the analysis rules
-// Run: npx convex run painAgent:resetRadar
+// Run: npx convex run painAgent:resetRadar   (then: npx convex run counters:recountPending)
 export const resetRadar = internalMutation({
   args: {},
   handler: async (ctx) => {
@@ -412,6 +452,7 @@ export const resetRadar = internalMutation({
       await ctx.db.patch(s._id, { status: "pending", problemId: undefined, extraction: undefined });
       signalsReset++;
     }
+    await addToCounter(ctx, PENDING_KEY, signalsReset);
     return { problemsDeleted, signalsReset };
   },
 });
