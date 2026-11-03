@@ -219,6 +219,8 @@ export default defineSchema({
     status: v.union(v.literal("running"), v.literal("idle"), v.literal("disabled")),
     startedAt: v.optional(v.number()),
     lastRun: v.optional(v.number()),
-    lastError: v.optional(v.string()),
+    lastError: v.optional(v.string()), // needs attention (red)
+    lastNote: v.optional(v.string()), // informational, self-healing (grey)
+    lastNoteAt: v.optional(v.number()),
   }).index("by_name", ["name"]),
 });

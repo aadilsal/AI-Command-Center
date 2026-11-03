@@ -580,6 +580,14 @@ export default function Home() {
                     {a.lastError}
                   </p>
                 )}
+                {!a.lastError &&
+                  a.lastNote &&
+                  a.lastNoteAt &&
+                  Date.now() - a.lastNoteAt < 12 * 60 * 60 * 1000 && (
+                    <p className="mt-1 truncate text-xs text-zinc-500" title={a.lastNote}>
+                      {a.lastNote} · {timeAgo(a.lastNoteAt)}
+                    </p>
+                  )}
               </li>
             ))}
           </ul>

@@ -77,9 +77,8 @@ async function callOnce(opts: CallOptions, maxTokens: number): Promise<string> {
     const seconds = parseWaitSeconds(text, res.headers.get("retry-after"));
     const isDaily = /per day|\bTPD\b|\bRPD\b/i.test(text);
     if (isDaily || seconds > MAX_WAIT_SECONDS) {
-      const mins = Math.ceil(seconds / 60);
       throw new QuotaExhaustedError(
-        `Groq ${isDaily ? "daily " : ""}limit reached — resumes in ~${mins} min`
+        `Groq ${isDaily ? "daily " : ""}limit reached — paused, will retry next run`
       );
     }
     throw new RateLimitError(`Groq rate limit: ${text.slice(0, 200)}`, (seconds + 1) * 1000);
