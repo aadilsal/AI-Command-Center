@@ -37,6 +37,7 @@ import type * as resumes from "../resumes.js";
 import type * as seed from "../seed.js";
 import type * as solutionDesigner from "../solutionDesigner.js";
 import type * as techversaProfile from "../techversaProfile.js";
+import type * as views from "../views.js";
 
 import type {
   ApiFromModules,
@@ -74,6 +75,7 @@ declare const fullApi: ApiFromModules<{
   seed: typeof seed;
   solutionDesigner: typeof solutionDesigner;
   techversaProfile: typeof techversaProfile;
+  views: typeof views;
 }>;
 
 /**

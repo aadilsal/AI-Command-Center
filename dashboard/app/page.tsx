@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
 import CoachCard from "./CoachCard";
@@ -538,9 +539,9 @@ export default function Home() {
       <div className="mt-8 grid gap-4 md:grid-cols-3">
         <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
           <div className="flex items-center justify-between">
-            <span className="flex items-center gap-2 text-zinc-400">
-              <Briefcase className="h-4 w-4" /> Career Agent
-            </span>
+            <Link href="/career" className="flex items-center gap-2 text-zinc-400 hover:text-zinc-100">
+              <Briefcase className="h-4 w-4" /> Career Agent <span className="text-xs text-zinc-500">Open →</span>
+            </Link>
             <RunButton running={agentRunning("Career Agent")} onRun={() => runCareerAgent()} />
           </div>
           <p className="mt-3 text-3xl font-semibold">{data.matchJobs.length}</p>
@@ -551,9 +552,9 @@ export default function Home() {
 
         <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
           <div className="flex items-center justify-between">
-            <span className="flex items-center gap-2 text-zinc-400">
-              <Radar className="h-4 w-4" /> Opportunity Radar
-            </span>
+            <Link href="/radar" className="flex items-center gap-2 text-zinc-400 hover:text-zinc-100">
+              <Radar className="h-4 w-4" /> Opportunity Radar <span className="text-xs text-zinc-500">Open →</span>
+            </Link>
             <RunButton running={agentRunning("Pain Agent")} onRun={() => runPainAgent()} />
           </div>
           <p className="mt-3 text-3xl font-semibold">{data.activeProblems}</p>
