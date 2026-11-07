@@ -26,4 +26,7 @@ crons.daily("career agent evening run", { hourUTC: 15, minuteUTC: 0 }, internal.
 // 04:00 UTC = 09:00 PKT — daily briefing (sees both job runs)
 crons.daily("daily briefing", { hourUTC: 4, minuteUTC: 0 }, internal.briefingAgent.run, {});
 
+// Sundays 04:30 UTC = 09:30 PKT — weekly Coach report
+crons.weekly("coach agent", { dayOfWeek: "sunday", hourUTC: 4, minuteUTC: 30 }, internal.coachAgent.run, {});
+
 export default crons;

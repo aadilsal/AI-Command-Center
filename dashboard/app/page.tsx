@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
+import CoachCard from "./CoachCard";
 import type { Doc, Id } from "../convex/_generated/dataModel";
 import {
   Briefcase,
@@ -593,6 +594,8 @@ export default function Home() {
           </ul>
         </section>
       </div>
+
+      <CoachCard />
 
       {/* ---------- Opportunity Radar ---------- */}
       <section className="mt-8 rounded-xl border border-zinc-800 bg-zinc-900 p-5">

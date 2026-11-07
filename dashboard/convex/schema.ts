@@ -174,6 +174,24 @@ export default defineSchema({
 
   // ---------------------------------------------------------------- System
 
+  // Weekly Coach Agent reports (your weak spots, from your own data)
+  coachReports: defineTable({
+    createdAt: v.number(),
+    headline: v.string(),
+    strengths: v.array(v.string()),
+    weakSpots: v.array(
+      v.object({
+        area: v.string(),
+        evidence: v.string(),
+        whyItMatters: v.string(),
+        action: v.string(),
+        resource: v.string(),
+      })
+    ),
+    focusThisWeek: v.string(),
+    stats: v.any(),
+  }).index("by_createdAt", ["createdAt"]),
+
   // Cheap running totals (e.g. "pendingSignals") so the dashboard never scans big tables
   counters: defineTable({
     key: v.string(),
