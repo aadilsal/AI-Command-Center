@@ -1,234 +1,75 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
-import CoachCard from "./CoachCard";
-import ProspectCard from "./ProspectCard";
-import TrendCard from "./TrendCard";
-import type { Doc, Id } from "../convex/_generated/dataModel";
 import {
+  ArrowUpRight,
   Briefcase,
-  Radar,
-  Bot,
-  Loader2,
-  Play,
-  Sparkles,
-  RefreshCw,
-  ExternalLink,
-  ChevronLeft,
-  ChevronRight,
-  ChevronDown,
-  ChevronUp,
-  Copy,
-  Check,
-  FileText,
+  GraduationCap,
   Lightbulb,
-  Quote,
+  Loader2,
+  Mail,
+  Play,
+  Radar,
+  RefreshCw,
+  Settings2,
+  TrendingUp,
 } from "lucide-react";
+import { SCHEDULES, formatNext, shortAgo } from "./schedules";
 
-const JOBS_PER_PAGE = 6;
-const PROBLEMS_PER_PAGE = 8;
-
-const statusDot: Record<string, string> = {
-  running: "bg-green-500 animate-pulse",
-  idle: "bg-yellow-500",
-  disabled: "bg-zinc-500",
+// Each agent's colour on the HUD
+const C = {
+  career: "#5eead4",
+  radar: "#fbbf24",
+  prospects: "#a78bfa",
+  trends: "#38bdf8",
+  coach: "#f472b6",
+  designer: "#93a1ad",
 };
 
-const recBadge: Record<string, string> = {
-  Apply: "bg-green-500/15 text-green-400",
-  Maybe: "bg-yellow-500/15 text-yellow-400",
-  Skip: "bg-zinc-500/15 text-zinc-400",
+const runColor: Record<string, string> = {
+  success: "bg-[#5eead4]",
+  note: "bg-[#64748b]",
+  error: "bg-[#f87171]",
+  interrupted: "bg-[#fbbf24]",
 };
 
-const kindBadge: Record<string, { label: string; cls: string }> = {
-  followup: { label: "Follow up", cls: "bg-orange-500/15 text-orange-400" },
-  job: { label: "Job", cls: "bg-blue-500/15 text-blue-400" },
-  opportunity: { label: "Opportunity", cls: "bg-purple-500/15 text-purple-400" },
-  lead: { label: "Lead", cls: "bg-green-500/15 text-green-400" },
-  system: { label: "System", cls: "bg-zinc-500/15 text-zinc-400" },
+const kindStyle: Record<string, { color: string; icon: React.ComponentType<{ className?: string }>; label: string }> = {
+  job: { color: C.career, icon: Briefcase, label: "Career" },
+  followup: { color: C.coach, icon: Briefcase, label: "Follow up" },
+  opportunity: { color: C.radar, icon: Radar, label: "Radar" },
+  lead: { color: C.prospects, icon: Mail, label: "Lead" },
+  system: { color: C.designer, icon: Settings2, label: "System" },
 };
 
-const JOB_STATUSES = ["Saved", "Applied", "Interview", "Rejected", "Offer"] as const;
-type JobStatus = (typeof JOB_STATUSES)[number];
-const PROBLEM_TABS = ["New", "Exploring", "Building", "Launched", "Parked"] as const;
-type ProblemStatus = (typeof PROBLEM_TABS)[number];
-
-function timeAgo(ts?: number) {
-  if (!ts) return "Never";
-  const mins = Math.floor((Date.now() - ts) / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins} min ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs} h ago`;
-  return `${Math.floor(hrs / 24)} d ago`;
+type Overview = NonNullable<ReturnType<typeof useOverview>>;
+function useOverview() {
+  return useQuery(api.home.overview);
 }
 
-function scoreColor(score: number) {
-  if (score >= 60) return "text-green-400";
-  if (score >= 40) return "text-yellow-400";
-  return "text-zinc-400";
+// ---------- Small pieces ----------
+
+function Panel({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return <section className={`rounded-2xl border border-hud-line bg-hud-panel ${className}`}>{children}</section>;
 }
 
-// ---------- Small UI helpers ----------
-
-function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(text);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        } catch {
-          /* clipboard blocked */
-        }
-      }}
-      className="flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
-    >
-      {copied ? <Check className="h-3 w-3 text-green-400" /> : <Copy className="h-3 w-3" />}
-      {copied ? "Copied" : label}
-    </button>
-  );
+function Dot({ worker }: { worker?: Overview["workers"][number] }) {
+  if (!worker) return <span className="hud-dot hud-dot-off" />;
+  if (worker.status === "running") return <span className="hud-dot hud-dot-run" />;
+  if (worker.lastError) return <span className="hud-dot hud-dot-err" />;
+  return <span className="hud-dot hud-dot-live" />;
 }
 
-function Block({ title, text, copyText }: { title: string; text: string; copyText?: string }) {
-  return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">{title}</span>
-        <CopyButton text={copyText ?? text} />
-      </div>
-      <p className="whitespace-pre-wrap text-sm text-zinc-200">{text}</p>
-    </div>
-  );
-}
-
-function ListBlock({ title, items }: { title: string; items: string[] }) {
-  if (!items.length) return null;
-  return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-      <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">{title}</span>
-      <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-zinc-200">
-        {items.map((x, i) => (
-          <li key={i}>{x}</li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-// ---------- Pagination ----------
-
-function paginate<T>(items: T[], page: number, perPage: number) {
-  const pageCount = Math.max(1, Math.ceil(items.length / perPage));
-  const current = Math.min(Math.max(1, page), pageCount);
-  const start = (current - 1) * perPage;
-  return {
-    pageItems: items.slice(start, start + perPage),
-    pageCount,
-    current,
-    from: items.length ? start + 1 : 0,
-    to: Math.min(start + perPage, items.length),
-  };
-}
-
-function pageNumbers(current: number, count: number): (number | "…")[] {
-  if (count <= 7) return Array.from({ length: count }, (_, i) => i + 1);
-  const pages: (number | "…")[] = [1];
-  const lo = Math.max(2, current - 1);
-  const hi = Math.min(count - 1, current + 1);
-  if (lo > 2) pages.push("…");
-  for (let p = lo; p <= hi; p++) pages.push(p);
-  if (hi < count - 1) pages.push("…");
-  pages.push(count);
-  return pages;
-}
-
-function Pagination({
-  current,
-  pageCount,
-  from,
-  to,
-  total,
-  onChange,
-}: {
-  current: number;
-  pageCount: number;
-  from: number;
-  to: number;
-  total: number;
-  onChange: (page: number) => void;
-}) {
-  if (total === 0) return null;
-  return (
-    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-zinc-800 pt-4">
-      <span className="text-xs text-zinc-500">
-        {from}–{to} of {total}
-      </span>
-      {pageCount > 1 && (
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => onChange(current - 1)}
-            disabled={current === 1}
-            className="rounded-md border border-zinc-700 p-1 text-zinc-400 hover:bg-zinc-800 disabled:opacity-40"
-            aria-label="Previous page"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-          {pageNumbers(current, pageCount).map((p, i) =>
-            p === "…" ? (
-              <span key={`gap-${i}`} className="px-1 text-xs text-zinc-600">
-                …
-              </span>
-            ) : (
-              <button
-                key={p}
-                onClick={() => onChange(p)}
-                className={`min-w-7 rounded-md px-2 py-1 text-xs ${
-                  p === current
-                    ? "bg-zinc-100 text-zinc-900"
-                    : "border border-zinc-700 text-zinc-400 hover:bg-zinc-800"
-                }`}
-              >
-                {p}
-              </button>
-            )
-          )}
-          <button
-            onClick={() => onChange(current + 1)}
-            disabled={current === pageCount}
-            className="rounded-md border border-zinc-700 p-1 text-zinc-400 hover:bg-zinc-800 disabled:opacity-40"
-            aria-label="Next page"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------- Run button ----------
-
-function RunButton({
-  running,
-  onRun,
-  label = "Run now",
-  icon = "play",
-}: {
-  running: boolean;
-  onRun: () => Promise<unknown>;
-  label?: string;
-  icon?: "play" | "refresh";
-}) {
+function RunIcon({ running, onRun, label }: { running: boolean; onRun: () => Promise<unknown>; label: string }) {
   const [busy, setBusy] = useState(false);
-  const Icon = icon === "refresh" ? RefreshCw : Play;
   return (
     <button
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={busy || running}
       onClick={async () => {
         setBusy(true);
         try {
@@ -237,645 +78,468 @@ function RunButton({
           setBusy(false);
         }
       }}
-      disabled={busy || running}
-      className="flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs hover:bg-zinc-800 disabled:opacity-50"
+      className="flex h-8 w-8 items-center justify-center rounded-md border border-hud-line text-hud-muted transition-colors hover:border-hud-accent hover:text-hud-accent disabled:opacity-40"
     >
-      {running ? <Loader2 className="h-3 w-3 animate-spin" /> : <Icon className="h-3 w-3" />}
-      {running ? "Running" : label}
+      {busy || running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
     </button>
   );
 }
 
-// ---------- Panels ----------
-
-function KitPanel({ kit }: { kit: NonNullable<Doc<"jobs">["kit"]> }) {
-  const highlightsText = kit.highlights.map((h) => `- ${h}`).join("\n");
+function AgentTile({
+  index,
+  name,
+  color,
+  href,
+  worker,
+  when,
+  run,
+  children,
+}: {
+  index: string;
+  name: string;
+  color: string;
+  href: string;
+  worker?: Overview["workers"][number];
+  when: string;
+  run?: { running: boolean; onRun: () => Promise<unknown> };
+  children: React.ReactNode;
+}) {
   return (
-    <div className="mt-3 space-y-3">
-      <p className="text-xs text-zinc-500">
-        Use your <span className="font-medium text-zinc-300">{kit.resumeVariant}</span> CV · generated{" "}
-        {timeAgo(kit.generatedAt)} · review before sending
-      </p>
-      <Block title="Summary" text={kit.summary} />
-      <Block title="Highlights" text={highlightsText} />
-      <Block title="Skills to list first" text={kit.skills.join(" · ")} copyText={kit.skills.join(", ")} />
-      <Block title="Cover letter" text={kit.coverLetter} />
-      <Block
-        title={`Email — ${kit.emailSubject}`}
-        text={kit.emailBody}
-        copyText={`Subject: ${kit.emailSubject}\n\n${kit.emailBody}`}
-      />
-    </div>
-  );
-}
-
-function solutionAsMarkdown(p: Doc<"problems">) {
-  const s = p.solution!;
-  const bullets = (xs: string[]) => xs.map((x) => `- ${x}`).join("\n");
-  return `# ${s.name}
-
-**Problem:** ${p.title}
-**Target user:** ${s.targetUser}
-
-## Concept
-${s.concept}
-
-## MVP features
-${bullets(s.mvpFeatures)}
-
-## Stack
-${bullets(s.stack)}
-
-**Build effort:** ${s.buildEffort}
-
-## Pricing
-${s.pricing}
-
-## Why it wins
-${s.differentiation}
-
-## Where the users are
-${bullets(s.channels)}
-
-## Content angles
-${bullets(s.contentAngles)}
-
-## Validate before building
-${bullets(s.validationSteps)}
-
-## Risks
-${bullets(s.risks)}
-`;
-}
-
-function SolutionPanel({ problem }: { problem: Doc<"problems"> }) {
-  const s = problem.solution!;
-  return (
-    <div className="mt-3 space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm">
-          <span className="text-lg font-semibold">{s.name}</span>
-          <span className="ml-2 text-xs text-zinc-500">
-            designed {timeAgo(s.generatedAt)} · {s.buildEffort}
+    <div
+      className="group flex flex-col gap-3 rounded-xl border border-hud-line bg-hud-panel p-[18px] transition-colors hover:border-[color:var(--tile)]"
+      style={{ borderTop: `2px solid ${color}`, ["--tile" as string]: color }}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="hud-label">
+          {index} · {name}
+        </span>
+        <span className="flex items-center gap-2">
+          <span className="hud-label flex items-center gap-1.5">
+            <Dot worker={worker} />
+            {when}
           </span>
-        </p>
-        <CopyButton text={solutionAsMarkdown(problem)} label="Copy as doc" />
+          {run && <RunIcon running={run.running} onRun={run.onRun} label={`Run ${name.toLowerCase()} now`} />}
+        </span>
       </div>
-      <Block title="Concept" text={s.concept} />
-      <Block title="Target user" text={s.targetUser} />
-      <div className="grid gap-3 md:grid-cols-2">
-        <ListBlock title="MVP features" items={s.mvpFeatures} />
-        <ListBlock title="Stack" items={s.stack} />
-      </div>
-      <div className="grid gap-3 md:grid-cols-2">
-        <Block title="Pricing" text={s.pricing} />
-        <Block title="Why it wins" text={s.differentiation} />
-      </div>
-      <ListBlock title="Validate before building" items={s.validationSteps} />
-      <div className="grid gap-3 md:grid-cols-2">
-        <ListBlock title="Where the users are" items={s.channels} />
-        <ListBlock title="Content angles" items={s.contentAngles} />
-      </div>
-      <ListBlock title="Risks" items={s.risks} />
+      {children}
+      <Link
+        href={href}
+        className="mt-auto inline-flex items-center gap-1 self-start text-[13px] text-hud-muted no-underline hover:text-hud-text"
+      >
+        Open <ArrowUpRight className="h-3.5 w-3.5" />
+      </Link>
     </div>
   );
 }
 
-function EvidenceList({ problem }: { problem: Doc<"problems"> }) {
+function Metric({ value, unit }: { value: React.ReactNode; unit: string }) {
   return (
-    <div className="mt-3 space-y-2">
-      {problem.evidence.map((e, i) => (
-        <div key={i} className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-          <p className="flex gap-2 text-sm text-zinc-200">
-            <Quote className="mt-0.5 h-3 w-3 shrink-0 text-zinc-500" />
-            <span>{e.quote}</span>
-          </p>
-          <a
-            href={e.url}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-1 inline-flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-200"
-          >
-            {e.source} <ExternalLink className="h-3 w-3" />
-          </a>
-        </div>
-      ))}
-      {problem.wtpEvidence.length > 0 && (
-        <ListBlock title="Willingness to pay" items={problem.wtpEvidence} />
-      )}
-      {problem.workarounds.length > 0 && <ListBlock title="Current workarounds" items={problem.workarounds} />}
-    </div>
+    <span className="flex items-baseline gap-2">
+      <span className="font-display text-[34px] font-semibold leading-none">{value}</span>
+      <span className="text-sm text-hud-dim">{unit}</span>
+    </span>
   );
 }
 
 // ---------- Page ----------
 
 export default function Home() {
-  const data = useQuery(api.dashboard.summary);
-  const briefing = useQuery(api.briefingAgent.latest);
-
-  const runCareerAgent = useMutation(api.careerAgent.runNow);
-  const runPainAgent = useMutation(api.painAgent.runNow);
+  const data = useOverview();
+  const runCareer = useMutation(api.careerAgent.runNow);
+  const runPain = useMutation(api.painAgent.runNow);
+  const runProspects = useMutation(api.prospectAgent.runNow);
+  const runTrends = useMutation(api.trendAgent.runNow);
+  const runCoach = useMutation(api.coachAgent.runNow);
   const runBriefing = useMutation(api.briefingAgent.runNow);
 
-  const setJobStatus = useMutation(api.jobCrm.setStatus);
-  const markApplied = useMutation(api.jobCrm.markApplied);
-  const setProblemStatus = useMutation(api.solutionDesigner.setStatus);
-
-  const generateKit = useAction(api.applicationKit.generateKit);
-  const designSolution = useAction(api.solutionDesigner.designSolution);
-
-  const [jobPage, setJobPage] = useState(1);
-  const [problemTab, setProblemTab] = useState<ProblemStatus>("New");
-  const [problemPage, setProblemPage] = useState(1);
-  const [openJob, setOpenJob] = useState<string | null>(null);
-  const [openSolution, setOpenSolution] = useState<string | null>(null);
-  const [openEvidence, setOpenEvidence] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [notice, setNotice] = useState<{ kind: "error" | "info"; text: string } | null>(null);
+  // Re-render every 30s so "3H AGO" / clock stay fresh
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(t);
+  }, []);
 
   if (data === undefined) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-zinc-950 text-zinc-400">
+      <main className="flex min-h-screen items-center justify-center text-hud-dim">
         <Loader2 className="h-6 w-6 animate-spin" />
       </main>
     );
   }
 
-  const agentRunning = (name: string) =>
-    data.agents.find((a) => a.name === name)?.status === "running";
+  const worker = (name: string) => data.workers.find((w) => w.name === name);
+  const running = (name: string) => worker(name)?.status === "running";
+  const when = (name: string) => {
+    const w = worker(name);
+    return w?.status === "running" ? "RUNNING" : shortAgo(w?.lastRun);
+  };
 
-  async function runAI(key: string, fn: () => Promise<any>, onDone?: (result: any) => void) {
-    setBusy(key);
-    setNotice(null);
-    try {
-      const result = await fn();
-      onDone?.(result);
-    } catch (err) {
-      setNotice({ kind: "error", text: err instanceof Error ? err.message : String(err) });
-    } finally {
-      setBusy(null);
-    }
-  }
+  const clock = new Date(now).toLocaleString("en-GB", {
+    timeZone: "Asia/Karachi",
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const hour = Number(new Date(now).toLocaleString("en-GB", { timeZone: "Asia/Karachi", hour: "2-digit", hour12: false }));
+  const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+  const systemLine = data.agentErrors
+    ? `${data.agentErrors} WORKER${data.agentErrors > 1 ? "S" : ""} NEED ATTENTION`
+    : "ALL SYSTEMS NOMINAL";
 
-  function design(problem: Doc<"problems">, force = false) {
-    const id = problem._id as Id<"problems">;
-    runAI(problem._id, () => designSolution({ id, force }), (r) => {
-      if (r?.viable === false) {
-        setNotice({ kind: "info", text: `Parked “${problem.title}”: ${r.parkedReason}` });
-      } else if (r?.needsMoreEvidence) {
-        setNotice({ kind: "info", text: r.message });
-      } else {
-        // Designing moves New → Exploring; follow it there and open the design
-        if (problem.status === "New") setProblemTab("Exploring");
-        setOpenSolution(problem._id);
-      }
-    });
-  }
+  const maxFound = Math.max(1, ...data.career.foundPerDay);
+  const prospectPct = data.prospects.total ? Math.round((data.prospects.ready / data.prospects.total) * 100) : 0;
+  const sourceLine = Object.entries(data.prospects.sources)
+    .map(([s, n]) => `${s.replace("OpenStreetMap", "OSM").replace("HN Who is hiring", "HN")} ${n}`)
+    .join(" · ");
 
-  // Briefing links like "#problem-<id>" jump to the right tab/page and open the problem
-  function jumpToProblem(id: string) {
-    const p = data!.problems.find((x) => x._id === id);
-    if (!p) return;
-    const inTab = data!.problems.filter((x) => x.status === p.status);
-    const index = inTab.findIndex((x) => x._id === id);
-    setProblemTab(p.status);
-    setProblemPage(Math.floor(index / PROBLEMS_PER_PAGE) + 1);
-    if (p.solution) setOpenSolution(id);
-    else setOpenEvidence(id);
-    setTimeout(() => document.getElementById(`problem-${id}`)?.scrollIntoView({ behavior: "smooth" }), 50);
-  }
-
-  const jobsPaged = paginate(data.matchJobs, jobPage, JOBS_PER_PAGE);
-  const tabProblems = data.problems.filter((p) => p.status === problemTab);
-  const problemsPaged = paginate(tabProblems, problemPage, PROBLEMS_PER_PAGE);
+  // Action queue: the briefing's prioritised list, or top jobs if there's no briefing yet
+  const queue =
+    data.briefing?.actions.map((a) => ({
+      title: a.title,
+      sub: `${(kindStyle[a.kind] ?? kindStyle.system).label} · ${a.why}`,
+      kind: a.kind,
+      href: a.url?.startsWith("#problem-") ? "/radar" : (a.url ?? null),
+      external: !!a.url && !a.url.startsWith("#"),
+      badge: null as number | null,
+    })) ??
+    data.career.topJobs.map((j) => ({
+      title: j.title,
+      sub: `Career · ${j.company}${j.hasKit ? " · kit ready" : ""}`,
+      kind: "job",
+      href: "/career",
+      external: false,
+      badge: j.matchScore,
+    }));
 
   return (
-    <main className="min-h-screen bg-zinc-950 p-6 text-zinc-100 md:p-10">
-      <h1 className="text-2xl font-semibold">Aadil AI Command Center</h1>
-      <p className="mt-1 text-sm text-zinc-400">What needs your attention today</p>
-
-      {notice && (
-        <div
-          className={`mt-4 flex items-start justify-between gap-3 rounded-lg border p-3 text-sm ${
-            notice.kind === "error"
-              ? "border-red-900 bg-red-950/50 text-red-300"
-              : "border-zinc-700 bg-zinc-900 text-zinc-300"
-          }`}
-        >
-          <span>{notice.text}</span>
-          <button onClick={() => setNotice(null)} className="text-xs opacity-70 hover:opacity-100">
-            Dismiss
-          </button>
-        </div>
-      )}
-
-      {/* ---------- Daily briefing ---------- */}
-      <section className="mt-8 rounded-xl border border-zinc-700 bg-gradient-to-b from-zinc-900 to-zinc-950 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <span className="flex items-center gap-2 text-zinc-300">
-            <Sparkles className="h-4 w-4" /> Today&apos;s briefing
-            {briefing && (
-              <span className="text-xs text-zinc-500">
-                · {briefing.date} · {timeAgo(briefing.createdAt)}
-                {briefing.generatedBy === "rules" ? " · basic mode" : ""}
-              </span>
-            )}
-          </span>
-          <RunButton
-            running={agentRunning("Briefing Agent")}
-            onRun={() => runBriefing()}
-            label="Regenerate"
-            icon="refresh"
-          />
-        </div>
-
-        {!briefing ? (
-          <p className="mt-4 text-sm text-zinc-500">No briefing yet — press Regenerate.</p>
-        ) : (
-          <>
-            <p className="mt-3 text-lg font-medium">{briefing.headline}</p>
-            <ol className="mt-4 space-y-3">
-              {briefing.actions.map((a, i) => {
-                const badge = kindBadge[a.kind] ?? kindBadge.system;
-                const isProblemLink = a.url?.startsWith("#problem-");
-                return (
-                  <li key={i} className="flex gap-3">
-                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-800 text-xs text-zinc-400">
-                      {i + 1}
-                    </span>
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className={`rounded px-1.5 py-0.5 text-xs ${badge.cls}`}>{badge.label}</span>
-                        {a.url && isProblemLink ? (
-                          <button
-                            onClick={() => jumpToProblem(a.url!.replace("#problem-", ""))}
-                            className="text-left text-sm hover:underline"
-                          >
-                            {a.title}
-                          </button>
-                        ) : a.url ? (
-                          <a
-                            href={a.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="flex items-center gap-1 text-sm hover:underline"
-                          >
-                            {a.title} <ExternalLink className="h-3 w-3 text-zinc-500" />
-                          </a>
-                        ) : (
-                          <span className="text-sm">{a.title}</span>
-                        )}
-                      </div>
-                      <p className="mt-0.5 text-xs text-zinc-500">{a.why}</p>
-                    </div>
-                  </li>
-                );
-              })}
-            </ol>
-          </>
-        )}
-      </section>
-
-      {/* ---------- Summary cards ---------- */}
-      <div className="mt-8 grid gap-4 md:grid-cols-3">
-        <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-          <div className="flex items-center justify-between">
-            <Link href="/career" className="flex items-center gap-2 text-zinc-400 hover:text-zinc-100">
-              <Briefcase className="h-4 w-4" /> Career Agent <span className="text-xs text-zinc-500">Open →</span>
-            </Link>
-            <RunButton running={agentRunning("Career Agent")} onRun={() => runCareerAgent()} />
-          </div>
-          <p className="mt-3 text-3xl font-semibold">{data.matchJobs.length}</p>
-          <p className="text-sm text-zinc-400">
-            open matches · {data.appliedCount} acted on · {data.archivedJobs} archived
-          </p>
-        </section>
-
-        <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-          <div className="flex items-center justify-between">
-            <Link href="/radar" className="flex items-center gap-2 text-zinc-400 hover:text-zinc-100">
-              <Radar className="h-4 w-4" /> Opportunity Radar <span className="text-xs text-zinc-500">Open →</span>
-            </Link>
-            <RunButton running={agentRunning("Pain Agent")} onRun={() => runPainAgent()} />
-          </div>
-          <p className="mt-3 text-3xl font-semibold">{data.activeProblems}</p>
-          <p className="text-sm text-zinc-400">
-            problems · {data.readyToDesign} ready to design · {data.pendingSignals} signals queued
-          </p>
-        </section>
-
-        <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-          <Link href="/agents" className="flex items-center gap-2 text-zinc-400 hover:text-zinc-100">
-            <Bot className="h-4 w-4" /> AI Workers <span className="text-xs text-zinc-500">Open →</span>
-          </Link>
-          <ul className="mt-3 space-y-2">
-            {data.agents.map((a) => (
-              <li key={a._id} className="text-sm">
-                <div className="flex items-center justify-between">
-                  <span className="flex items-center gap-2">
-                    <span className={`h-2 w-2 rounded-full ${statusDot[a.status]}`} />
-                    {a.name}
-                  </span>
-                  <span className="text-zinc-500">{timeAgo(a.lastRun)}</span>
-                </div>
-                {a.lastError && (
-                  <p className="mt-1 truncate text-xs text-red-400" title={a.lastError}>
-                    {a.lastError}
-                  </p>
-                )}
-                {!a.lastError &&
-                  a.lastNote &&
-                  a.lastNoteAt &&
-                  Date.now() - a.lastNoteAt < 12 * 60 * 60 * 1000 && (
-                    <p className="mt-1 truncate text-xs text-zinc-500" title={a.lastNote}>
-                      {a.lastNote} · {timeAgo(a.lastNoteAt)}
-                    </p>
-                  )}
-              </li>
-            ))}
-          </ul>
-        </section>
-      </div>
-
-      <ProspectCard />
-
-      <CoachCard />
-
-      <TrendCard />
-
-      {/* ---------- Opportunity Radar ---------- */}
-      <section className="mt-8 rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+    <main className="px-4 pt-7 pb-14 md:px-9">
+      <div className="mx-auto flex max-w-[1180px] flex-col gap-6">
+        {/* ---------- Header ---------- */}
+        <header className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h2 className="font-medium">Opportunity Radar</h2>
-            <p className="mt-1 text-xs text-zinc-500">
-              Real business pain, grouped and scored. Problems need {data.minEvidenceToDesign}+ pieces of
-              evidence before designing a solution.
+            <p className={`mb-1 font-mono text-xs tracking-[0.14em] ${data.agentErrors ? "text-red-400" : "text-hud-accent"}`}>
+              {clock.toUpperCase()} PKT · {systemLine}
+            </p>
+            <h1 className="font-display text-[34px] font-semibold tracking-tight">{greeting}, Aadil</h1>
+          </div>
+          <BriefingButton running={running("Briefing Agent")} onRun={() => runBriefing()} />
+        </header>
+
+        {/* ---------- Briefing ---------- */}
+        <Panel className="grid overflow-hidden md:grid-cols-[minmax(0,1.6fr)_minmax(260px,1fr)]">
+          <div className="border-hud-soft p-7 md:border-r">
+            <h2 className="hud-label mb-3">
+              // Morning briefing{data.briefing ? ` · ${shortAgo(data.briefing.createdAt)}` : ""}
+            </h2>
+            <p className="text-[19px] leading-relaxed text-[#d7dee5]">
+              {data.briefing?.headline ?? "No briefing yet. Press Refresh briefing to generate one."}
             </p>
           </div>
-          <div className="flex flex-wrap gap-1">
-            {PROBLEM_TABS.map((tab) => (
-              <button
-                key={tab}
-                onClick={() => {
-                  setProblemTab(tab);
-                  setProblemPage(1);
-                }}
-                className={`rounded-md px-2.5 py-1 text-xs ${
-                  problemTab === tab
-                    ? "bg-zinc-100 text-zinc-900"
-                    : "border border-zinc-700 text-zinc-400 hover:bg-zinc-800"
-                }`}
-              >
-                {tab} ({data.problemCounts[tab] ?? 0})
-              </button>
-            ))}
+          <div className="grid grid-cols-2 content-center gap-x-5 gap-y-4 border-t border-hud-soft p-6 md:border-t-0">
+            <Stat label="Open jobs" value={data.career.open} color={C.career} />
+            <Stat label="Problems" value={data.radar.active} color={C.radar} />
+            <Stat label="Prospects" value={data.prospects.total} color={C.prospects} />
+            <Stat label="Runs / 24h" value={data.runs24h} />
           </div>
+        </Panel>
+
+        <div className="grid items-start gap-5 lg:grid-cols-3">
+          {/* ---------- Action queue ---------- */}
+          <Panel>
+            <div className="flex items-center justify-between border-b border-hud-soft px-5 py-4">
+              <h2 className="font-display text-lg font-semibold">Action queue</h2>
+              <span className="font-mono text-xs text-hud-accent">{String(queue.length).padStart(2, "0")} PENDING</span>
+            </div>
+            {queue.length === 0 ? (
+              <p className="px-5 py-6 text-sm text-hud-dim">Nothing waiting. You&apos;re caught up.</p>
+            ) : (
+              <ul className="p-1.5">
+                {queue.map((q, i) => {
+                  const style = kindStyle[q.kind] ?? kindStyle.system;
+                  const Icon = style.icon;
+                  const inner = (
+                    <>
+                      <span
+                        className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-lg border font-mono text-[13px]"
+                        style={{ borderColor: `${style.color}66`, color: style.color }}
+                      >
+                        {q.badge ?? <Icon className="h-[18px] w-[18px]" />}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium">{q.title}</span>
+                        <span className="block truncate text-[13px] text-hud-dim">{q.sub}</span>
+                      </span>
+                      {q.external && <ArrowUpRight className="h-4 w-4 shrink-0 text-hud-dim" />}
+                    </>
+                  );
+                  const cls =
+                    "flex items-center gap-3 rounded-lg px-3.5 py-3 text-hud-text no-underline transition-colors hover:bg-white/[0.03]";
+                  return (
+                    <li key={i}>
+                      {q.href ? (
+                        q.external ? (
+                          <a href={q.href} target="_blank" rel="noreferrer" className={cls}>
+                            {inner}
+                          </a>
+                        ) : (
+                          <Link href={q.href} className={cls}>
+                            {inner}
+                          </Link>
+                        )
+                      ) : (
+                        <div className={cls}>{inner}</div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </Panel>
+
+          {/* ---------- Agent tiles ---------- */}
+          <section aria-labelledby="agents-h" className="flex flex-col gap-3.5 lg:col-span-2">
+            <h2 id="agents-h" className="hud-label text-xs">
+              // Agents
+            </h2>
+            <div className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-3">
+              <AgentTile
+                index="01"
+                name="Career"
+                color={C.career}
+                href="/career"
+                worker={worker("Career Agent")}
+                when={when("Career Agent")}
+                run={{ running: running("Career Agent"), onRun: () => runCareer() }}
+              >
+                <Metric value={data.career.open} unit="open matches" />
+                <span className="flex h-7 items-end gap-1" aria-hidden="true">
+                  {data.career.foundPerDay.map((n, i) => (
+                    <span
+                      key={i}
+                      className="flex-1 rounded-[2px]"
+                      style={{
+                        height: `${Math.max(8, (n / maxFound) * 100)}%`,
+                        background: i >= 5 ? C.career : "#134e4a",
+                      }}
+                    />
+                  ))}
+                </span>
+                <span className="truncate text-[13px] text-hud-muted">
+                  {data.career.topJobs[0]
+                    ? `Top: ${data.career.topJobs[0].title} · ${data.career.topJobs[0].matchScore}`
+                    : `${data.career.applied} applied · ${data.career.interview} interviewing`}
+                </span>
+              </AgentTile>
+
+              <AgentTile
+                index="02"
+                name="Radar"
+                color={C.radar}
+                href="/radar"
+                worker={worker("Pain Agent")}
+                when={when("Pain Agent")}
+                run={{ running: running("Pain Agent"), onRun: () => runPain() }}
+              >
+                <Metric value={data.radar.active} unit="problems tracked" />
+                <span className="flex flex-wrap gap-1.5">
+                  <Chip color={C.radar}>{data.radar.withSolution} solved</Chip>
+                  <Chip>{data.radar.readyToDesign} ready</Chip>
+                  <Chip>{data.radar.pendingSignals} signals</Chip>
+                </span>
+                <span className="truncate text-[13px] text-hud-muted">
+                  {data.radar.top ? `Top: ${data.radar.top.title} · ${data.radar.top.score}` : "No problems yet"}
+                </span>
+              </AgentTile>
+
+              <AgentTile
+                index="03"
+                name="Prospects"
+                color={C.prospects}
+                href="/prospects"
+                worker={worker("Prospect Agent")}
+                when={when("Prospect Agent")}
+                run={{ running: running("Prospect Agent"), onRun: () => runProspects() }}
+              >
+                <Metric value={data.prospects.ready} unit={`ready of ${data.prospects.total}`} />
+                <span className="block h-1.5 overflow-hidden rounded-full bg-hud-line" aria-hidden="true">
+                  <span className="block h-full" style={{ width: `${prospectPct}%`, background: C.prospects }} />
+                </span>
+                <span className="truncate text-[13px] text-hud-muted">
+                  {sourceLine || "No sources yet"} · sent {data.prospects.contacted}
+                  {data.prospects.replied ? ` · replied ${data.prospects.replied}` : ""}
+                </span>
+              </AgentTile>
+
+              <AgentTile
+                index="04"
+                name="Trend Scout"
+                color={C.trends}
+                href="/trends"
+                worker={worker("Trend Scout")}
+                when={when("Trend Scout")}
+                run={{ running: running("Trend Scout"), onRun: () => runTrends() }}
+              >
+                {data.trend ? (
+                  <>
+                    <span className="flex flex-wrap gap-1.5">
+                      {data.trend.trends.map((t) => (
+                        <span key={t} className="rounded-full border border-[#38bdf8]/35 px-2.5 py-1 text-xs text-[#7dd3fc]">
+                          {t}
+                        </span>
+                      ))}
+                    </span>
+                    {data.trend.idea && (
+                      <span className="flex gap-1.5 text-[13px] text-hud-muted">
+                        <TrendingUp className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        <span className="line-clamp-2">Idea: {data.trend.idea}</span>
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <span className="text-[13px] text-hud-dim">No report yet. Runs Mondays.</span>
+                )}
+              </AgentTile>
+
+              <AgentTile
+                index="05"
+                name="Coach"
+                color={C.coach}
+                href="/coach"
+                worker={worker("Coach Agent")}
+                when={when("Coach Agent")}
+                run={{ running: running("Coach Agent"), onRun: () => runCoach() }}
+              >
+                {data.coach ? (
+                  <>
+                    <span className="flex gap-2 font-display text-lg font-semibold leading-snug">
+                      <GraduationCap className="mt-1 h-4 w-4 shrink-0" style={{ color: C.coach }} />
+                      <span className="line-clamp-3">{data.coach.focus}</span>
+                    </span>
+                    <span className="line-clamp-2 text-[13px] text-hud-muted">{data.coach.headline}</span>
+                  </>
+                ) : (
+                  <span className="text-[13px] text-hud-dim">No report yet. Runs Sundays.</span>
+                )}
+              </AgentTile>
+
+              <AgentTile index="06" name="Solution Designer" color={C.designer} href="/radar" when="ON DEMAND">
+                <Metric value={data.designer.designsThisWeek} unit="designs this week" />
+                <span className="flex gap-1.5 text-[13px] text-hud-muted">
+                  <Lightbulb className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">
+                    {data.designer.latest ? `Latest: ${data.designer.latest.name}` : "No designs yet"}
+                  </span>
+                </span>
+                <span className="text-[13px] text-hud-dim">{data.designer.parked} parked by viability gate</span>
+              </AgentTile>
+            </div>
+          </section>
         </div>
 
-        {tabProblems.length === 0 && (
-          <p className="mt-4 text-sm text-zinc-500">
-            {problemTab === "New" && data.pendingSignals > 0
-              ? `Nothing here yet — ${data.pendingSignals} signals are queued for analysis.`
-              : `No problems with status “${problemTab}”.`}
-          </p>
-        )}
-
-        <ul className="mt-4 divide-y divide-zinc-800">
-          {problemsPaged.pageItems.map((p) => {
-            const id = p._id as Id<"problems">;
-            const isBusy = busy === p._id;
-            const solutionOpen = openSolution === p._id && !!p.solution;
-            const evidenceOpen = openEvidence === p._id;
-            const ready = p.signalCount >= data.minEvidenceToDesign;
-
-            return (
-              <li key={p._id} id={`problem-${p._id}`} className="scroll-mt-6 py-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium">{p.title}</p>
-                    <p className="mt-0.5 text-xs text-zinc-500">
-                      {p.persona}
-                      {p.industries.length ? ` · ${p.industries.join(", ")}` : ""}
-                    </p>
-                    <p className="mt-1 text-xs text-zinc-400">{p.summary}</p>
-                    <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">
-                        {p.signalCount} evidence
-                      </span>
-                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300">
-                        {p.sources.join(" · ")}
-                      </span>
-                      {p.wtpCount > 0 && (
-                        <span className="rounded bg-green-500/15 px-1.5 py-0.5 text-green-400">
-                          {p.wtpCount} would pay
+        {/* ---------- Worker telemetry ---------- */}
+        <Panel className="overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-hud-soft px-5 py-4">
+            <h2 className="hud-label text-xs">// Worker telemetry</h2>
+            <Link href="/agents" className="text-sm text-hud-accent no-underline hover:text-[#99f6e4]">
+              Full run history
+            </Link>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] border-collapse text-sm">
+              <thead>
+                <tr className="text-left">
+                  {["Worker", "Status", "Last run", "Next", "Last 7 runs"].map((h) => (
+                    <th key={h} scope="col" className="hud-label px-5 py-3 font-medium">
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {data.workers.map((w) => {
+                  const schedule = SCHEDULES[w.name];
+                  const status = w.status === "running" ? "RUNNING" : w.lastError ? "ERROR" : "IDLE";
+                  const statusCls =
+                    status === "RUNNING" ? "text-[#fbbf24]" : status === "ERROR" ? "text-red-400" : "text-hud-accent";
+                  const blanks = Math.max(0, 7 - w.lastRuns.length);
+                  return (
+                    <tr key={w._id} className="border-t border-hud-soft">
+                      <td className="px-5 py-3">{w.name}</td>
+                      <td className={`px-5 py-3 font-mono text-xs ${statusCls}`} title={w.lastError ?? undefined}>
+                        {status}
+                      </td>
+                      <td className="px-5 py-3 text-hud-muted">{shortAgo(w.lastRun).toLowerCase()}</td>
+                      <td className="px-5 py-3 text-hud-muted">
+                        {schedule ? `${formatNext(schedule.next(w.lastRun))} · ${schedule.label}` : "manual"}
+                      </td>
+                      <td className="px-5 py-3">
+                        <span
+                          className="inline-flex gap-[3px]"
+                          aria-label={`${w.lastRuns.filter((r) => r === "success").length} of ${w.lastRuns.length} recent runs succeeded`}
+                        >
+                          {Array.from({ length: blanks }).map((_, i) => (
+                            <span key={`b${i}`} className="h-3.5 w-2.5 bg-hud-line" />
+                          ))}
+                          {w.lastRuns.map((r, i) => (
+                            <span key={i} title={r} className={`h-3.5 w-2.5 ${runColor[r] ?? "bg-hud-line"}`} />
+                          ))}
                         </span>
-                      )}
-                      {p.solution && (
-                        <span className="rounded bg-purple-500/15 px-1.5 py-0.5 text-purple-400">
-                          {p.solution.name}
-                        </span>
-                      )}
-                    </div>
-                    {p.status === "Parked" && p.parkedReason && (
-                      <p className="mt-2 text-xs text-zinc-500">Parked: {p.parkedReason}</p>
-                    )}
-                  </div>
-
-                  <div className="flex shrink-0 items-center gap-2">
-                    <span className={`text-lg font-semibold ${scoreColor(p.score)}`}>{p.score}</span>
-                    <select
-                      value={p.status}
-                      onChange={(e) => setProblemStatus({ id, status: e.target.value as ProblemStatus })}
-                      className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs"
-                    >
-                      {PROBLEM_TABS.map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <button
-                    onClick={() => setOpenEvidence(evidenceOpen ? null : p._id)}
-                    className="flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs hover:bg-zinc-800"
-                  >
-                    {evidenceOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                    Evidence ({p.evidence.length})
-                  </button>
-
-                  {p.solution ? (
-                    <>
-                      <button
-                        onClick={() => setOpenSolution(solutionOpen ? null : p._id)}
-                        className="flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-900 hover:bg-white"
-                      >
-                        <Lightbulb className="h-3 w-3" />
-                        {solutionOpen ? "Hide solution" : "View solution"}
-                      </button>
-                      <button
-                        onClick={() => design(p, true)}
-                        disabled={isBusy}
-                        className="flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 disabled:opacity-50"
-                      >
-                        {isBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-                        {isBusy ? "Designing…" : "Redesign"}
-                      </button>
-                    </>
-                  ) : p.status !== "Parked" && ready ? (
-                    <button
-                      onClick={() => design(p)}
-                      disabled={isBusy}
-                      className="flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-900 hover:bg-white disabled:opacity-50"
-                    >
-                      {isBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Lightbulb className="h-3 w-3" />}
-                      {isBusy ? "Designing…" : "Design solution"}
-                    </button>
-                  ) : p.status !== "Parked" ? (
-                    <>
-                      <span className="rounded-md border border-dashed border-zinc-700 px-2 py-1 text-xs text-zinc-500">
-                        Needs more evidence ({p.signalCount}/{data.minEvidenceToDesign})
-                      </span>
-                      <button
-                        onClick={() => design(p, true)}
-                        disabled={isBusy}
-                        className="text-xs text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline disabled:opacity-50"
-                      >
-                        {isBusy ? "Designing…" : "design anyway"}
-                      </button>
-                    </>
-                  ) : null}
-                </div>
-
-                {evidenceOpen && <EvidenceList problem={p} />}
-                {solutionOpen && p.solution && <SolutionPanel problem={p} />}
-              </li>
-            );
-          })}
-        </ul>
-        <Pagination
-          current={problemsPaged.current}
-          pageCount={problemsPaged.pageCount}
-          from={problemsPaged.from}
-          to={problemsPaged.to}
-          total={tabProblems.length}
-          onChange={setProblemPage}
-        />
-      </section>
-
-      {/* ---------- Job matches ---------- */}
-      <section className="mt-8 rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-        <h2 className="font-medium">Job matches</h2>
-        <p className="mt-1 text-xs text-zinc-500">
-          Jobs you haven&apos;t acted on, best first. “Prepare application” writes a tailored kit;
-          “Apply ↗” opens the posting and marks it Applied.
-        </p>
-        {data.matchJobs.length === 0 && (
-          <p className="mt-4 text-sm text-zinc-500">Nothing new — you&apos;re caught up.</p>
-        )}
-        <ul className="mt-4 divide-y divide-zinc-800">
-          {jobsPaged.pageItems.map((j) => {
-            const id = j._id as Id<"jobs">;
-            const isOpen = openJob === j._id && !!j.kit;
-            const isBusy = busy === j._id;
-            return (
-              <li key={j._id} className="py-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <span className="block text-sm">{j.title}</span>
-                    <span className="block text-xs text-zinc-500">
-                      {j.company} · {j.location ?? "—"} · {j.source}
-                    </span>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    {j.recommendation && (
-                      <span className={`rounded px-1.5 py-0.5 text-xs ${recBadge[j.recommendation]}`}>
-                        {j.recommendation}
-                      </span>
-                    )}
-                    <span className="text-sm font-semibold text-green-400">{j.matchScore}%</span>
-                  </div>
-                </div>
-                {j.missing?.length ? (
-                  <p className="mt-1 text-xs text-zinc-500">Missing: {j.missing.join(", ")}</p>
-                ) : null}
-
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <button
-                    onClick={() =>
-                      j.kit && !isOpen
-                        ? setOpenJob(j._id)
-                        : isOpen
-                          ? setOpenJob(null)
-                          : runAI(j._id, () => generateKit({ id }), () => setOpenJob(j._id))
-                    }
-                    disabled={isBusy}
-                    className="flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs hover:bg-zinc-800 disabled:opacity-50"
-                  >
-                    {isBusy ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : isOpen ? (
-                      <ChevronUp className="h-3 w-3" />
-                    ) : (
-                      <FileText className="h-3 w-3" />
-                    )}
-                    {isBusy
-                      ? "Writing…"
-                      : isOpen
-                        ? "Hide kit"
-                        : j.kit
-                          ? "View application kit"
-                          : "Prepare application"}
-                  </button>
-                  {j.kit && (
-                    <button
-                      onClick={() => runAI(j._id, () => generateKit({ id }), () => setOpenJob(j._id))}
-                      disabled={isBusy}
-                      className="flex items-center gap-1 rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 disabled:opacity-50"
-                    >
-                      <RefreshCw className="h-3 w-3" /> Regenerate
-                    </button>
-                  )}
-                  <a
-                    href={j.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    onClick={() => markApplied({ id })}
-                    className="flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-900 hover:bg-white"
-                  >
-                    Apply <ExternalLink className="h-3 w-3" />
-                  </a>
-                  <select
-                    value={j.status}
-                    onChange={(e) => setJobStatus({ id, status: e.target.value as JobStatus })}
-                    className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs"
-                  >
-                    {JOB_STATUSES.map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {isOpen && j.kit && <KitPanel kit={j.kit} />}
-              </li>
-            );
-          })}
-        </ul>
-        <Pagination
-          current={jobsPaged.current}
-          pageCount={jobsPaged.pageCount}
-          from={jobsPaged.from}
-          to={jobsPaged.to}
-          total={data.matchJobs.length}
-          onChange={setJobPage}
-        />
-      </section>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      </div>
     </main>
+  );
+}
+
+function Stat({ label, value, color }: { label: string; value: number; color?: string }) {
+  return (
+    <div>
+      <p className="hud-label">{label}</p>
+      <p className="mt-0.5 font-display text-[30px] font-semibold" style={color ? { color } : undefined}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function Chip({ children, color }: { children: React.ReactNode; color?: string }) {
+  return (
+    <span
+      className="rounded px-2 py-0.5 font-mono text-[11px] uppercase"
+      style={color ? { background: `${color}1a`, color } : { background: "rgba(255,255,255,0.05)", color: "#93a1ad" }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function BriefingButton({ running, onRun }: { running: boolean; onRun: () => Promise<unknown> }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      type="button"
+      disabled={busy || running}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          await onRun();
+        } finally {
+          setBusy(false);
+        }
+      }}
+      className="inline-flex min-h-11 items-center gap-2 rounded-[10px] border border-hud-accent bg-[#5eead4]/10 px-[18px] font-semibold text-hud-accent transition-colors hover:bg-[#5eead4]/20 disabled:opacity-50"
+    >
+      {busy || running ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+      {running ? "Briefing…" : "Refresh briefing"}
+    </button>
   );
 }

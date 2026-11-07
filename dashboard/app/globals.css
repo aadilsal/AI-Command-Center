@@ -1,26 +1,93 @@
 @import "tailwindcss";
 
+/* ---------- Command Center HUD theme ---------- */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg: #05070a;
+  --panel: rgba(9, 14, 19, 0.92);
+  --line: #1b2b36;
+  --line-soft: #12202a;
+  --text: #e6edf3;
+  --muted: #93a1ad;
+  --dim: #7d8a96;
+  --accent: #5eead4;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-hud-bg: var(--bg);
+  --color-hud-panel: var(--panel);
+  --color-hud-line: var(--line);
+  --color-hud-soft: var(--line-soft);
+  --color-hud-text: var(--text);
+  --color-hud-muted: var(--muted);
+  --color-hud-dim: var(--dim);
+  --color-hud-accent: var(--accent);
+  --font-sans: "Inter Variable", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+  --font-display: "Space Grotesk Variable", "Inter Variable", sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  color-scheme: dark;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(rgba(94, 234, 212, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(94, 234, 212, 0.045) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-attachment: fixed;
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+/* Small uppercase monospace label used across the HUD */
+.hud-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+/* Glowing status dot */
+.hud-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  flex-shrink: 0;
+}
+.hud-dot-live {
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+.hud-dot-run {
+  background: #fbbf24;
+  box-shadow: 0 0 8px #fbbf24;
+  animation: hud-pulse 1.4s ease-in-out infinite;
+}
+.hud-dot-err {
+  background: #f87171;
+  box-shadow: 0 0 8px #f87171;
+}
+.hud-dot-off {
+  background: #4b5563;
+}
+
+@keyframes hud-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-dot-run {
+    animation: none;
+  }
+}
+
+/* Detail pages still use bg-zinc-950 on <main>; let the grid show through instead */
+main.bg-zinc-950 {
+  background-color: transparent;
 }
