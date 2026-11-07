@@ -4,10 +4,10 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { callLLMJson, LLM_PACING_MS, QuotaExhaustedError, sleep } from "./llm";
 import { FOLLOWUP_SYSTEM, PROSPECT_SYSTEM, emailFooter } from "./prompts";
-import { agenciesFromHN, agenciesInCity, researchSite, type Candidate, type SiteResearch } from "./prospectSources";
+import { agenciesFromGitHub, agenciesFromHN, agenciesInCity, researchSite, type Candidate, type SiteResearch } from "./prospectSources";
 
 const AGENT_NAME = "Prospect Agent";
-const CITIES_PER_RUN = 2;
+const CITIES_PER_RUN = 4;
 const RESEARCH_PER_RUN = 8;
 const RUN_BUDGET_MS = 8 * 60 * 1000;
 const MAX_ATTEMPTS = 3;
@@ -137,6 +137,7 @@ export const run = internalAction({
 
       // 1. Discover
       let discovered = 0;
+      const bySource = { openStreetMap: 0, github: 0, hackerNews: 0 };
       const targets = await ctx.runQuery(internal.prospectAgent.nextTargets, { limit: CITIES_PER_RUN });
       for (const t of targets) {
         try {
@@ -144,13 +145,24 @@ export const run = internalAction({
           const added = await ctx.runMutation(internal.prospectAgent.insertCandidates, { candidates });
           await ctx.runMutation(internal.prospectAgent.markTarget, { id: t._id, bbox, found: added });
           discovered += added;
+          bySource.openStreetMap += added;
         } catch (e) {
           notes.push(`${t.city.split(",")[0]}: ${msg(e)}`);
         }
       }
       try {
+        const gh = await agenciesFromGitHub(targets.map((t) => ({ city: t.city, country: t.country })));
+        const added = await ctx.runMutation(internal.prospectAgent.insertCandidates, { candidates: gh });
+        bySource.github += added;
+        discovered += added;
+      } catch (e) {
+        notes.push(`GitHub: ${msg(e)}`);
+      }
+      try {
         const hn = await agenciesFromHN();
-        discovered += await ctx.runMutation(internal.prospectAgent.insertCandidates, { candidates: hn });
+        const added = await ctx.runMutation(internal.prospectAgent.insertCandidates, { candidates: hn });
+        bySource.hackerNews += added;
+        discovered += added;
       } catch (e) {
         notes.push(`HN: ${msg(e)}`);
       }
@@ -210,7 +222,7 @@ export const run = internalAction({
       const lastError = quota ?? (notes.length ? `Source issues — ${notes.slice(0, 3).join("; ")}` : null);
       await ctx.runMutation(internal.agentStatus.set, { name: AGENT_NAME, status: "idle", lastRun: Date.now(), lastError });
 
-      return { discovered, researched: queue.length, ready, noEmail, notFit, failed, ...(quota && { stoppedByQuota: quota }) };
+      return { discovered, bySource, citiesScanned: targets.map((t) => t.city.split(",")[0]), researched: queue.length, ready, noEmail, notFit, failed, ...(quota && { stoppedByQuota: quota }) };
     } catch (e) {
       await ctx.runMutation(internal.agentStatus.set, { name: AGENT_NAME, status: "idle", lastRun: Date.now(), lastError: msg(e) });
       throw e;

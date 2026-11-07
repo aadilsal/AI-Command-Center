@@ -89,7 +89,7 @@ export const CATEGORIES: Record<string, Category> = {
   },
   agency: {
     label: "Marketing / web agency",
-    searchTerms: ["marketing agency", "advertising agency", "digital agency", "web design"],
+    searchTerms: ["marketing agency", "advertising agency", "digital agency", "web design", "design agency", "creative agency", "branding agency", "seo agency", "media agency"],
     value: 0,
     problem: "",
     solution: "",

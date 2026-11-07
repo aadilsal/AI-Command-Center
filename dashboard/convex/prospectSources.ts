@@ -204,3 +204,88 @@ export async function researchSite(website: string): Promise<SiteResearch | null
   if (text.length < 200) return null; // nothing meaningful to read
   return { text: text.slice(0, 4000), emails, contactPage };
 }
+
+// ---------- Discovery: agency organizations on GitHub (official search API) ----------
+
+const GH = "https://api.github.com";
+const GH_TERMS = ["agency", "studio", "digital"];
+const MAX_PROFILE_LOOKUPS_NO_TOKEN = 25;
+
+function ghHeaders(): Record<string, string> {
+  const token = process.env.GITHUB_TOKEN;
+  return {
+    "User-Agent": UA,
+    Accept: "application/vnd.github+json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+async function ghJson(url: string): Promise<any> {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), 20000);
+  try {
+    const res = await fetch(url, { headers: ghHeaders(), signal: controller.signal });
+    if (res.status === 403 || res.status === 429) throw new Error("GitHub rate limit");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+export async function agenciesFromGitHub(cities: { city: string; country: string }[]): Promise<Candidate[]> {
+  const hasToken = !!process.env.GITHUB_TOKEN;
+  const maxLookups = hasToken ? 200 : MAX_PROFILE_LOOKUPS_NO_TOKEN;
+  const searchPause = hasToken ? 2500 : 7000; // search API: 30/min with token, 10/min without
+  const out: Candidate[] = [];
+  const seenLogins = new Set<string>();
+  let lookups = 0;
+
+  for (const { city, country } of cities) {
+    const cityName = city.split(",")[0].trim();
+    for (const term of GH_TERMS) {
+      const q = encodeURIComponent(`${term} type:org location:"${cityName}"`);
+      let data: any;
+      try {
+        data = await ghJson(`${GH}/search/users?q=${q}&per_page=30`);
+      } catch (e) {
+        if (e instanceof Error && e.message === "GitHub rate limit") return out; // stop gracefully
+        continue;
+      }
+      await new Promise((r) => setTimeout(r, searchPause));
+
+      for (const item of data.items ?? []) {
+        if (!item?.login || seenLogins.has(item.login)) continue;
+        if (lookups >= maxLookups) return out;
+        seenLogins.add(item.login);
+        lookups++;
+
+        let org: any;
+        try {
+          org = await ghJson(`${GH}/users/${item.login}`);
+        } catch (e) {
+          if (e instanceof Error && e.message === "GitHub rate limit") return out;
+          continue;
+        }
+
+        const blog = String(org.blog ?? "").trim();
+        if (!blog) continue; // need their own website
+        const website = blog.startsWith("http") ? blog : `https://${blog}`;
+        const domain = domainOf(website);
+        if (!domain || NOT_OWN_SITE.test(domain) || domain.endsWith("github.io")) continue;
+
+        const bio = String(org.bio ?? "").slice(0, 160);
+        out.push({
+          name: String(org.name || org.login).slice(0, 80),
+          website,
+          domain,
+          source: "GitHub",
+          sourceContext: `GitHub organization in ${cityName}${bio ? ` — "${bio}"` : ""}`,
+          city: cityName,
+          country,
+        });
+      }
+    }
+  }
+  return out;
+}
