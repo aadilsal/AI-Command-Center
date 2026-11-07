@@ -564,9 +564,9 @@ export default function Home() {
         </section>
 
         <section className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
-          <div className="flex items-center gap-2 text-zinc-400">
-            <Bot className="h-4 w-4" /> AI Workers
-          </div>
+          <Link href="/agents" className="flex items-center gap-2 text-zinc-400 hover:text-zinc-100">
+            <Bot className="h-4 w-4" /> AI Workers <span className="text-xs text-zinc-500">Open →</span>
+          </Link>
           <ul className="mt-3 space-y-2">
             {data.agents.map((a) => (
               <li key={a._id} className="text-sm">

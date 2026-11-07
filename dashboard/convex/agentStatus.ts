@@ -1,24 +1,40 @@
 import { v } from "convex/values";
-import { internalMutation } from "./_generated/server";
+import { internalMutation, type MutationCtx } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
 
 const STUCK_AFTER_MS = 12 * 60 * 1000; // Convex kills runs at 10 min, so 12+ means it died
 
-// Messages that describe something temporary that fixes itself next run → shown as a grey note.
-// Everything else → shown as a red error that needs attention.
+// Messages that describe something temporary that fixes itself next run → grey note.
+// Everything else → red error that needs attention.
 const TRANSIENT =
   /timed out|timeout|limit reached|rate limit|will retry|retry next run|interrupted|source issues|HTTP 5\d\d|HTTP 429|fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i;
 
-// "All sources failed" / "All N analyses failed" is a real problem even if the cause is transient.
 const isError = (msg: string) => /^All /.test(msg) || !TRANSIENT.test(msg);
 
 function messageFields(lastError: string | null | undefined) {
-  if (lastError === undefined) return {}; // leave as is
-  if (lastError === null) {
-    return { lastError: undefined, lastNote: undefined, lastNoteAt: undefined }; // clean run
-  }
+  if (lastError === undefined) return {};
+  if (lastError === null) return { lastError: undefined, lastNote: undefined, lastNoteAt: undefined };
   return isError(lastError)
     ? { lastError, lastNote: undefined, lastNoteAt: undefined }
     : { lastError: undefined, lastNote: lastError, lastNoteAt: Date.now() };
+}
+
+// Record a finished run in the history table
+async function logRun(
+  ctx: MutationCtx,
+  agent: Doc<"agents">,
+  finishedAt: number,
+  outcome: "success" | "note" | "error" | "interrupted",
+  message?: string
+) {
+  if (!agent.startedAt) return;
+  await ctx.db.insert("agentRuns", {
+    name: agent.name,
+    startedAt: agent.startedAt,
+    finishedAt,
+    outcome,
+    ...(message && { message: message.slice(0, 500) }),
+  });
 }
 
 // Shared status updater for every agent
@@ -34,6 +50,13 @@ export const set = internalMutation({
       .query("agents")
       .withIndex("by_name", (q) => q.eq("name", name))
       .first();
+
+    // A run just finished → write it to history
+    if (agent && agent.status === "running" && status === "idle" && lastRun !== undefined) {
+      const outcome =
+        lastError === null || lastError === undefined ? "success" : isError(lastError) ? "error" : "note";
+      await logRun(ctx, agent, lastRun, outcome, lastError ?? undefined);
+    }
 
     const fields = {
       status,
@@ -76,18 +99,16 @@ export const resetStuck = internalMutation({
     for (const agent of await ctx.db.query("agents").collect()) {
       if (agent.status !== "running") continue;
       if (agent.startedAt && now - agent.startedAt < STUCK_AFTER_MS) continue;
-      await ctx.db.patch(agent._id, {
-        status: "idle",
-        ...messageFields("Run was interrupted (computer asleep or timed out) — will retry next run"),
-      });
+      const msg = "Run was interrupted (computer asleep or timed out) — will retry next run";
+      await logRun(ctx, agent, now, "interrupted", msg);
+      await ctx.db.patch(agent._id, { status: "idle", ...messageFields(msg) });
       reset++;
     }
     return { reset };
   },
 });
 
-// One-time: re-sort messages already stored under the old rules.
-// Run: npx convex run agentStatus:reclassify
+// One-time: re-sort messages stored under older rules. Run: npx convex run agentStatus:reclassify
 export const reclassify = internalMutation({
   args: {},
   handler: async (ctx) => {

@@ -173,3 +173,56 @@ export const signalsPage = query({
     };
   },
 });
+
+// ---------------------------------------------------------------- Agents: overview + run history
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export const agentsOverview = query({
+  args: {},
+  handler: async (ctx) => {
+    const since = Date.now() - 30 * DAY_MS;
+    const agents = await ctx.db.query("agents").collect();
+
+    const rows = [];
+    for (const a of agents) {
+      const runs = await ctx.db
+        .query("agentRuns")
+        .withIndex("by_name", (q) => q.eq("name", a.name).gte("startedAt", since))
+        .collect();
+
+      const durations = runs.map((r) => r.finishedAt - r.startedAt);
+      const last = runs.length ? runs[runs.length - 1] : null;
+
+      rows.push({
+        ...a,
+        stats30d: {
+          runs: runs.length,
+          success: runs.filter((r) => r.outcome === "success").length,
+          notes: runs.filter((r) => r.outcome === "note").length,
+          errors: runs.filter((r) => r.outcome === "error").length,
+          interrupted: runs.filter((r) => r.outcome === "interrupted").length,
+          avgSeconds: durations.length ? Math.round(durations.reduce((x, y) => x + y, 0) / durations.length / 1000) : 0,
+        },
+        lastDurationSeconds: last ? Math.round((last.finishedAt - last.startedAt) / 1000) : null,
+      });
+    }
+
+    // Active agents first, retired last
+    return rows.sort((x, y) => Number(x.status === "disabled") - Number(y.status === "disabled") || x.name.localeCompare(y.name));
+  },
+});
+
+export const runsPage = query({
+  args: { name: v.optional(v.string()), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, { name, paginationOpts }) => {
+    if (name) {
+      return await ctx.db
+        .query("agentRuns")
+        .withIndex("by_name", (q) => q.eq("name", name))
+        .order("desc")
+        .paginate(paginationOpts);
+    }
+    return await ctx.db.query("agentRuns").withIndex("by_startedAt").order("desc").paginate(paginationOpts);
+  },
+});

@@ -192,6 +192,17 @@ export default defineSchema({
     stats: v.any(),
   }).index("by_createdAt", ["createdAt"]),
 
+  // One row per agent run (written automatically by agentStatus.ts)
+  agentRuns: defineTable({
+    name: v.string(),
+    startedAt: v.number(),
+    finishedAt: v.number(),
+    outcome: v.union(v.literal("success"), v.literal("note"), v.literal("error"), v.literal("interrupted")),
+    message: v.optional(v.string()),
+  })
+    .index("by_name", ["name", "startedAt"])
+    .index("by_startedAt", ["startedAt"]),
+
   // Cheap running totals (e.g. "pendingSignals") so the dashboard never scans big tables
   counters: defineTable({
     key: v.string(),
