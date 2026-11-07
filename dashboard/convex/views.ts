@@ -226,3 +226,43 @@ export const runsPage = query({
     return await ctx.db.query("agentRuns").withIndex("by_startedAt").order("desc").paginate(paginationOpts);
   },
 });
+
+// ---------------------------------------------------------------- Coach + Trend Scout: history and full reports
+
+export const coachHistory = query({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, { paginationOpts }) => {
+    const res = await ctx.db.query("coachReports").withIndex("by_createdAt").order("desc").paginate(paginationOpts);
+    return { ...res, page: res.page.map((r) => ({ _id: r._id, createdAt: r.createdAt, headline: r.headline })) };
+  },
+});
+
+export const coachReport = query({
+  args: { id: v.optional(v.id("coachReports")) },
+  handler: async (ctx, { id }) => {
+    const report = id
+      ? await ctx.db.get(id)
+      : await ctx.db.query("coachReports").withIndex("by_createdAt").order("desc").first();
+    if (!report) return null;
+    const previous = await ctx.db
+      .query("coachReports")
+      .withIndex("by_createdAt", (q) => q.lt("createdAt", report.createdAt))
+      .order("desc")
+      .first();
+    return { report, previous };
+  },
+});
+
+export const trendHistory = query({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, { paginationOpts }) => {
+    const res = await ctx.db.query("trendReports").withIndex("by_createdAt").order("desc").paginate(paginationOpts);
+    return { ...res, page: res.page.map((r) => ({ _id: r._id, createdAt: r.createdAt, headline: r.headline })) };
+  },
+});
+
+export const trendReport = query({
+  args: { id: v.optional(v.id("trendReports")) },
+  handler: async (ctx, { id }) =>
+    id ? await ctx.db.get(id) : await ctx.db.query("trendReports").withIndex("by_createdAt").order("desc").first(),
+});

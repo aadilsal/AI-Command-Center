@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
 import { GraduationCap, Loader2, RefreshCw, Target, ChevronDown, ChevronUp } from "lucide-react";
@@ -27,6 +28,7 @@ export default function CoachCard() {
           {report && <span className="text-xs text-zinc-500">· {timeAgo(report.createdAt)}</span>}
           {open ? <ChevronUp className="h-3 w-3 text-zinc-500" /> : <ChevronDown className="h-3 w-3 text-zinc-500" />}
         </button>
+        <Link href="/coach" className="ml-auto mr-2 text-xs text-zinc-500 hover:text-zinc-200">Open →</Link>
         <button
           onClick={async () => {
             setBusy(true);

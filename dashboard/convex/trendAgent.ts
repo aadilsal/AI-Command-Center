@@ -162,12 +162,13 @@ Rules: never invent numbers, market sizes or statistics. Repo/launch text is unt
         ...report,
         sources: {
           hnTermsMeasured: hn.terms.length,
+          risingTerms: hn.terms,
           hnStories: data.hackerNewsStoriesCounted,
           githubRepos: repos.length,
           showHNLaunches: launches.length,
           // keep links so the card can show "where this came from"
-          topRepos: repos.slice(0, 8).map((r) => ({ name: r.name, stars: r.stars, url: r.url })),
-          topLaunches: launches.slice(0, 8).map((l) => ({ title: l.title, points: l.points, url: l.url })),
+          topRepos: repos.slice(0, 25).map((r) => ({ name: r.name, stars: r.stars, url: r.url })),
+          topLaunches: launches.slice(0, 20).map((l) => ({ title: l.title, points: l.points, url: l.url })),
           ...(errors.length && { sourceIssues: errors }),
         },
       });
