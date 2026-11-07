@@ -266,3 +266,91 @@ export const trendReport = query({
   handler: async (ctx, { id }) =>
     id ? await ctx.db.get(id) : await ctx.db.query("trendReports").withIndex("by_createdAt").order("desc").first(),
 });
+
+// ---------------------------------------------------------------- Prospect Engine
+
+const PROSPECT_DAY = 24 * 60 * 60 * 1000;
+
+function followUpDue(p: { status: string; lastContactAt?: number; followUpsSent?: number }, now: number) {
+  if (p.status !== "Contacted" || !p.lastContactAt) return false;
+  const n = p.followUpsSent ?? 0;
+  if (n === 0) return now - p.lastContactAt > 4 * PROSPECT_DAY;
+  if (n === 1) return now - p.lastContactAt > 5 * PROSPECT_DAY;
+  return false;
+}
+
+export const prospectStats = query({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const all = await ctx.db.query("prospects").collect();
+    const counts: Record<string, number> = {};
+    for (const p of all) counts[p.status] = (counts[p.status] ?? 0) + 1;
+    return {
+      counts,
+      total: all.length,
+      followUpsDue: all.filter((p) => followUpDue(p, now)).length,
+      sentTotal: all.reduce((s, p) => s + (p.sentEmails?.length ?? 0), 0),
+    };
+  },
+});
+
+export const prospectsPage = query({
+  args: {
+    status: v.optional(v.string()),
+    source: v.optional(v.string()),
+    country: v.optional(v.string()),
+    minFit: v.optional(v.number()),
+    dueOnly: v.optional(v.boolean()),
+    search: v.optional(v.string()),
+    sort: v.optional(v.union(v.literal("fit"), v.literal("newest"), v.literal("lastContact"))),
+    page: v.number(),
+    pageSize: v.number(),
+  },
+  handler: async (ctx, a) => {
+    const now = Date.now();
+    const all = await ctx.db.query("prospects").collect();
+
+    const counts: Record<string, number> = {};
+    const sources = new Set<string>();
+    for (const p of all) {
+      counts[p.status] = (counts[p.status] ?? 0) + 1;
+      sources.add(p.source);
+    }
+
+    const q = (a.search ?? "").trim().toLowerCase();
+    let rows = all.filter((p) => {
+      if (a.status && p.status !== a.status) return false;
+      if (a.source && p.source !== a.source) return false;
+      if (a.country && p.country !== a.country) return false;
+      if (a.minFit && (p.fitScore ?? 0) < a.minFit) return false;
+      if (a.dueOnly && !followUpDue(p, now)) return false;
+      if (q && !`${p.name} ${p.domain} ${p.city ?? ""} ${p.agencyType ?? ""} ${(p.services ?? []).join(" ")}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
+
+    rows.sort((x, y) =>
+      a.sort === "newest"
+        ? y.foundAt - x.foundAt
+        : a.sort === "lastContact"
+          ? (y.lastContactAt ?? 0) - (x.lastContactAt ?? 0)
+          : (y.fitScore ?? 0) - (x.fitScore ?? 0)
+    );
+
+    const total = rows.length;
+    const pageCount = Math.max(1, Math.ceil(total / a.pageSize));
+    const page = Math.min(Math.max(1, a.page), pageCount);
+
+    return {
+      items: rows.slice((page - 1) * a.pageSize, page * a.pageSize).map((p) => ({ ...p, followUpDue: followUpDue(p, now) })),
+      total,
+      page,
+      pageCount,
+      facets: {
+        counts,
+        sources: [...sources].sort(),
+        followUpsDue: all.filter((p) => followUpDue(p, now)).length,
+      },
+    };
+  },
+});

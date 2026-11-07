@@ -32,4 +32,7 @@ crons.weekly("coach agent", { dayOfWeek: "sunday", hourUTC: 4, minuteUTC: 30 }, 
 // Mondays 04:45 UTC = 09:45 PKT — weekly Trend Scout
 crons.weekly("trend scout", { dayOfWeek: "monday", hourUTC: 4, minuteUTC: 45 }, internal.trendAgent.run, {});
 
+// 05:00 UTC = 10:00 PKT — find + research agencies, draft emails
+crons.daily("prospect agent", { hourUTC: 5, minuteUTC: 0 }, internal.prospectAgent.run, {});
+
 export default crons;

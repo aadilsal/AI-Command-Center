@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
 import CoachCard from "./CoachCard";
+import ProspectCard from "./ProspectCard";
 import TrendCard from "./TrendCard";
 import type { Doc, Id } from "../convex/_generated/dataModel";
 import {
@@ -596,6 +597,8 @@ export default function Home() {
           </ul>
         </section>
       </div>
+
+      <ProspectCard />
 
       <CoachCard />
 

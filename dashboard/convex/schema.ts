@@ -229,6 +229,63 @@ export default defineSchema({
     sources: v.any(), // what was measured (counts), for transparency
   }).index("by_createdAt", ["createdAt"]),
 
+  // ---------------------------------------------------------------- Prospect Engine
+  prospects: defineTable({
+    name: v.string(),
+    domain: v.string(), // unique; we dedupe on it
+    website: v.string(),
+    source: v.string(), // "OpenStreetMap" | "HN Who is hiring"
+    sourceContext: v.optional(v.string()),
+    city: v.optional(v.string()),
+    country: v.optional(v.string()),
+    status: v.union(
+      v.literal("New"), // found, not researched yet
+      v.literal("Ready"), // researched, email found, draft ready
+      v.literal("NoEmail"), // good fit, but no email on site (use their contact form)
+      v.literal("Contacted"),
+      v.literal("Replied"),
+      v.literal("Meeting"),
+      v.literal("Won"),
+      v.literal("Lost"),
+      v.literal("NotAFit")
+    ),
+    statusChangedAt: v.optional(v.number()),
+    foundAt: v.number(),
+    researchedAt: v.optional(v.number()),
+    description: v.optional(v.string()),
+    agencyType: v.optional(v.string()),
+    services: v.optional(v.array(v.string())),
+    sizeSignal: v.optional(v.string()),
+    fitScore: v.optional(v.number()),
+    fitReasons: v.optional(v.array(v.string())),
+    hook: v.optional(v.string()),
+    emailsFound: v.optional(v.array(v.string())),
+    contactEmail: v.optional(v.string()),
+    contactPage: v.optional(v.string()),
+    notFitReason: v.optional(v.string()),
+    draft: v.optional(
+      v.object({
+        kind: v.union(v.literal("intro"), v.literal("followup1"), v.literal("followup2")),
+        subject: v.string(),
+        body: v.string(),
+        generatedAt: v.number(),
+      })
+    ),
+    sentEmails: v.optional(v.array(v.object({ kind: v.string(), subject: v.string(), sentAt: v.number() }))),
+    lastContactAt: v.optional(v.number()),
+    followUpsSent: v.optional(v.number()),
+  })
+    .index("by_domain", ["domain"])
+    .index("by_status", ["status"]),
+
+  prospectTargets: defineTable({
+    city: v.string(),
+    country: v.string(),
+    lastScannedAt: v.optional(v.number()),
+    lastFound: v.optional(v.number()),
+    bbox: v.optional(v.array(v.number())),
+  }).index("by_city", ["city"]),
+
   // Cheap running totals (e.g. "pendingSignals") so the dashboard never scans big tables
   counters: defineTable({
     key: v.string(),

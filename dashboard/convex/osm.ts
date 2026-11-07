@@ -87,6 +87,13 @@ export const CATEGORIES: Record<string, Category> = {
     solution:
       "AI receptionist for calls, WhatsApp booking and reminders to cut no-shows, plus a simple booking page and Google profile.",
   },
+  agency: {
+    label: "Marketing / web agency",
+    searchTerms: ["marketing agency", "advertising agency", "digital agency", "web design"],
+    value: 0,
+    problem: "",
+    solution: "",
+  },
   hair_salon: {
     label: "Hair salon",
     searchTerms: ["hairdresser"],
