@@ -37,6 +37,8 @@ import type * as resumes from "../resumes.js";
 import type * as seed from "../seed.js";
 import type * as solutionDesigner from "../solutionDesigner.js";
 import type * as techversaProfile from "../techversaProfile.js";
+import type * as trendAgent from "../trendAgent.js";
+import type * as trendSources from "../trendSources.js";
 import type * as views from "../views.js";
 
 import type {
@@ -75,6 +77,8 @@ declare const fullApi: ApiFromModules<{
   seed: typeof seed;
   solutionDesigner: typeof solutionDesigner;
   techversaProfile: typeof techversaProfile;
+  trendAgent: typeof trendAgent;
+  trendSources: typeof trendSources;
   views: typeof views;
 }>;
 

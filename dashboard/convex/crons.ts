@@ -29,4 +29,7 @@ crons.daily("daily briefing", { hourUTC: 4, minuteUTC: 0 }, internal.briefingAge
 // Sundays 04:30 UTC = 09:30 PKT — weekly Coach report
 crons.weekly("coach agent", { dayOfWeek: "sunday", hourUTC: 4, minuteUTC: 30 }, internal.coachAgent.run, {});
 
+// Mondays 04:45 UTC = 09:45 PKT — weekly Trend Scout
+crons.weekly("trend scout", { dayOfWeek: "monday", hourUTC: 4, minuteUTC: 45 }, internal.trendAgent.run, {});
+
 export default crons;

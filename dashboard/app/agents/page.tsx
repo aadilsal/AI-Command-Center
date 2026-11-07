@@ -16,6 +16,7 @@ const SCHEDULES: Record<string, { label: string; next: (lastRun?: number) => num
   "Pain Agent": { label: "Every 6 hours", next: (last) => (last ? last + 6 * HOUR : null) },
   "Briefing Agent": { label: "Daily at 9:00 AM", next: () => nextDailyPKT([9]) },
   "Coach Agent": { label: "Sundays at 9:30 AM", next: () => nextWeeklyPKT(0, 9, 30) },
+  "Trend Scout": { label: "Mondays at 9:45 AM", next: () => nextWeeklyPKT(1, 9, 45) },
   "Lead Agent": { label: "Retired", next: () => null },
 };
 
@@ -83,6 +84,7 @@ export default function AgentsPage() {
     "Pain Agent": useMutation(api.painAgent.runNow),
     "Briefing Agent": useMutation(api.briefingAgent.runNow),
     "Coach Agent": useMutation(api.coachAgent.runNow),
+    "Trend Scout": useMutation(api.trendAgent.runNow),
   };
 
   const { results: runs, status: loadStatus, loadMore } = usePaginatedQuery(

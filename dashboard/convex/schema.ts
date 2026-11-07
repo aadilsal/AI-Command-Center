@@ -203,6 +203,32 @@ export default defineSchema({
     .index("by_name", ["name", "startedAt"])
     .index("by_startedAt", ["startedAt"]),
 
+  // Weekly Trend Scout reports (rising tech + project ideas)
+  trendReports: defineTable({
+    createdAt: v.number(),
+    headline: v.string(),
+    trends: v.array(
+      v.object({
+        name: v.string(),
+        stage: v.string(), // early | growing | mainstream
+        evidence: v.string(),
+        whyItMatters: v.string(),
+      })
+    ),
+    ideas: v.array(
+      v.object({
+        title: v.string(),
+        type: v.string(), // portfolio | product | service
+        oneLiner: v.string(),
+        whyNow: v.string(),
+        fitsYourStack: v.string(),
+        buildEffort: v.string(),
+        firstStep: v.string(),
+      })
+    ),
+    sources: v.any(), // what was measured (counts), for transparency
+  }).index("by_createdAt", ["createdAt"]),
+
   // Cheap running totals (e.g. "pendingSignals") so the dashboard never scans big tables
   counters: defineTable({
     key: v.string(),
