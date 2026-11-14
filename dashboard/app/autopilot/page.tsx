@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { ArrowUpRight, Check, Loader2, Lock, Pause, Play, X, Zap } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, Check, Loader2, Lock, Mail, Pause, Play, X, Zap } from "lucide-react";
 import { timeAgo } from "../ui";
 
 const MODES = [
@@ -34,6 +34,7 @@ const statusStyle: Record<string, string> = {
 
 export default function AutopilotPage() {
   const state = useQuery(api.autopilot.state);
+  const gmail = useQuery(api.gmail.status);
   const setPaused = useMutation(api.autopilot.setPaused);
   const setPolicy = useMutation(api.autopilot.setPolicy);
   const approve = useMutation(api.autopilot.approve);
@@ -122,6 +123,55 @@ export default function AutopilotPage() {
           ))}
         </div>
 
+        {/* Gmail connection */}
+        {gmail && (
+          <section
+            aria-label="Gmail connection"
+            className={`flex flex-wrap items-start gap-3 rounded-2xl border p-4 ${
+              gmail.status === "connected" ? "border-hud-line bg-hud-panel" : "border-red-500/40 bg-red-500/[0.06]"
+            }`}
+          >
+            <Mail className={`mt-0.5 h-5 w-5 shrink-0 ${gmail.status === "connected" ? "text-[#5eead4]" : "text-red-400"}`} />
+            <div className="min-w-0 flex-1 text-sm">
+              {gmail.status === "connected" ? (
+                <p>
+                  Gmail connected as <b>{gmail.email}</b>. Cold emails go out on weekdays between 14:00 and 23:00 PKT,
+                  one every few minutes ({state.sendingWindowOpen ? "sending window is open now" : "outside the sending window right now"}).
+                  Answers to replies can go any time.
+                </p>
+              ) : gmail.status === "error" ? (
+                <p>
+                  <b className="text-red-300">Gmail needs you to sign in again.</b> {gmail.lastError} Run{" "}
+                  <code className="rounded bg-black/40 px-1.5 py-0.5 font-mono text-xs">node scripts/gmail-login.mjs</code>
+                </p>
+              ) : (
+                <p>
+                  <b>Gmail isn&apos;t connected yet</b>, so sending and reply reading are locked. Run{" "}
+                  <code className="rounded bg-black/40 px-1.5 py-0.5 font-mono text-xs">node scripts/gmail-login.mjs</code> in the dashboard
+                  folder.
+                </p>
+              )}
+              {gmail.status === "connected" && !gmail.postalAddressSet && (
+                <p className="mt-2 flex items-start gap-1.5 text-[#fbbf24]">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>
+                    Add your business postal address — business emails must include one, so sending is blocked until it&apos;s set:{" "}
+                    <code className="rounded bg-black/40 px-1.5 py-0.5 font-mono text-xs">
+                      npx convex env set POSTAL_ADDRESS &quot;TechVersa, street, Lahore, Pakistan&quot;
+                    </code>
+                  </span>
+                </p>
+              )}
+              {gmail.status === "connected" && !gmail.bookingUrlSet && (
+                <p className="mt-2 text-hud-dim">
+                  Tip: add a free Cal.com booking link so replies can offer a call slot:{" "}
+                  <code className="rounded bg-black/40 px-1.5 py-0.5 font-mono text-xs">npx convex env set BOOKING_URL &quot;https://cal.com/you/15min&quot;</code>
+                </p>
+              )}
+            </div>
+          </section>
+        )}
+
         {notice && <p className="rounded-lg border border-hud-line bg-hud-panel p-3 text-sm text-hud-muted">{notice}</p>}
 
         {/* Approval queue */}
@@ -206,7 +256,7 @@ export default function AutopilotPage() {
                         {!p.available && <Lock className="h-3.5 w-3.5 shrink-0 text-hud-dim" />}
                         {p.label}
                       </span>
-                      {!p.available && <span className="text-xs text-hud-dim">Unlocks when Gmail is connected</span>}
+                      {!p.available && <span className="text-xs text-hud-dim">{p.lockedReason}</span>}
                     </td>
                     <td className="px-5 py-3 text-hud-muted">{p.agent}</td>
                     <td className="px-5 py-3">

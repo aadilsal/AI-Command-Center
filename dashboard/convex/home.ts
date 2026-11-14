@@ -11,7 +11,10 @@ import { getCounter } from "./counters";
 // Only cheap, live things (agent status, last runs) are read fresh on every request.
 
 const HOUR = 60 * 60 * 1000;
-const PAGE = 100;
+// Small pages: on a Chromebook, reading 100 jobs (with long descriptions) took over 1s
+const JOB_PAGE = 20;
+const PROBLEM_PAGE = 40;
+const PROSPECT_PAGE = 60;
 const MIN_EVIDENCE_TO_DESIGN = 2;
 const STALE_MS = 60 * 1000; // a page visit refreshes the snapshot if it's older than this
 
@@ -53,23 +56,10 @@ export const overview = query({
     const now = Date.now();
     const snap = await ctx.db.query("homeSnapshot").first();
 
-    const agents = (await ctx.db.query("agents").collect()).filter((a) => a.status !== "disabled");
-    const workers = [];
-    for (const a of agents) {
-      const runs = await ctx.db
-        .query("agentRuns")
-        .withIndex("by_name", (q) => q.eq("name", a.name))
-        .order("desc")
-        .take(7);
-      workers.push({
-        _id: a._id,
-        name: a.name,
-        status: a.status,
-        lastRun: a.lastRun,
-        lastError: a.lastError,
-        lastRuns: runs.reverse().map((r) => r.outcome),
-      });
-    }
+    // Agent status (small table). The last-7-runs strips are a separate query: home.workers
+    const workers = (await ctx.db.query("agents").collect())
+      .filter((a) => a.status !== "disabled")
+      .map((a) => ({ _id: a._id, name: a.name, status: a.status, lastRun: a.lastRun, lastError: a.lastError }));
     const runs24h = (
       await ctx.db
         .query("agentRuns")
@@ -98,6 +88,17 @@ export const overview = query({
           .withIndex("by_key", (q) => q.eq("key", "_global"))
           .first()
       )?.paused ?? false;
+    const repliesNew = (
+      await ctx.db
+        .query("inboundEmails")
+        .withIndex("by_status", (q) => q.eq("status", "new"))
+        .take(200)
+    ).length;
+    const lastReply = await ctx.db.query("inboundEmails").withIndex("by_receivedAt").order("desc").first();
+    const gmailRow = await ctx.db
+      .query("integrations")
+      .withIndex("by_name", (q) => q.eq("name", "gmail"))
+      .first();
     const lastDone = todays.filter((a) => a.status === "done").sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0))[0];
 
     return {
@@ -110,10 +111,41 @@ export const overview = query({
         doneToday: todays.filter((a) => a.status === "done").length,
         lastDone: lastDone ? lastDone.title : null,
       },
+      replies: {
+        new: repliesNew,
+        last: lastReply ? { from: lastReply.fromName || lastReply.fromEmail, category: lastReply.category, at: lastReply.receivedAt } : null,
+      },
+      gmail: { status: gmailRow?.status ?? "missing", email: gmailRow?.email ?? null },
       workers,
       runs24h,
       agentErrors: workers.filter((w) => w.lastError).length,
     };
+  },
+});
+
+// Worker telemetry for the home page: status + last 7 runs per agent (kept separate so
+// neither query gets near the 1-second limit)
+export const workers = query({
+  args: {},
+  handler: async (ctx) => {
+    const agents = (await ctx.db.query("agents").collect()).filter((a) => a.status !== "disabled");
+    const out = [];
+    for (const a of agents) {
+      const runs = await ctx.db
+        .query("agentRuns")
+        .withIndex("by_name", (q) => q.eq("name", a.name))
+        .order("desc")
+        .take(7);
+      out.push({
+        _id: a._id,
+        name: a.name,
+        status: a.status,
+        lastRun: a.lastRun,
+        lastError: a.lastError,
+        lastRuns: runs.reverse().map((r) => r.outcome),
+      });
+    }
+    return out;
   },
 });
 
@@ -277,7 +309,7 @@ export const jobsChunk = internalQuery({
     const res = await ctx.db
       .query("jobs")
       .withIndex("by_status", (q) => q.eq("status", s))
-      .paginate({ cursor, numItems: PAGE });
+      .paginate({ cursor, numItems: JOB_PAGE });
     return {
       items: res.page.map((j) => ({
         _id: j._id as string,
@@ -300,7 +332,7 @@ export const jobsChunk = internalQuery({
 export const problemsChunk = internalQuery({
   args: { cursor: v.union(v.string(), v.null()) },
   handler: async (ctx, { cursor }) => {
-    const res = await ctx.db.query("problems").paginate({ cursor, numItems: PAGE });
+    const res = await ctx.db.query("problems").paginate({ cursor, numItems: PROBLEM_PAGE });
     return {
       items: res.page.map((p) => ({
         _id: p._id as string,
@@ -320,7 +352,7 @@ export const problemsChunk = internalQuery({
 export const prospectsChunk = internalQuery({
   args: { cursor: v.union(v.string(), v.null()) },
   handler: async (ctx, { cursor }) => {
-    const res = await ctx.db.query("prospects").paginate({ cursor, numItems: PAGE });
+    const res = await ctx.db.query("prospects").paginate({ cursor, numItems: PROSPECT_PAGE });
     return {
       items: res.page.map((p) => ({ status: p.status as string | undefined, source: p.source })),
       cursor: res.continueCursor,

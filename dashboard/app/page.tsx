@@ -17,6 +17,7 @@ import {
   Settings2,
   TrendingUp,
   Zap,
+  Inbox,
 } from "lucide-react";
 import { SCHEDULES, formatNext, shortAgo } from "./schedules";
 
@@ -29,6 +30,7 @@ const C = {
   coach: "#f472b6",
   designer: "#93a1ad",
   autopilot: "#fb923c",
+  replies: "#e879f9",
 };
 
 const runColor: Record<string, string> = {
@@ -110,7 +112,7 @@ function AgentTile({
 }) {
   return (
     <div
-      className={`group flex flex-col gap-3 rounded-xl ${wide ? "sm:col-span-2 xl:col-span-3" : ""} border border-hud-line bg-hud-panel p-[18px] transition-colors hover:border-[color:var(--tile)]`}
+      className={`group flex flex-col gap-3 rounded-xl ${wide ? "sm:col-span-2" : ""} border border-hud-line bg-hud-panel p-[18px] transition-colors hover:border-[color:var(--tile)]`}
       style={{ borderTop: `2px solid ${color}`, ["--tile" as string]: color }}
     >
       <div className="flex items-center justify-between gap-2">
@@ -149,6 +151,7 @@ function Metric({ value, unit }: { value: React.ReactNode; unit: string }) {
 
 export default function Home() {
   const data = useOverview();
+  const telemetry = useQuery(api.home.workers);
   const runCareer = useMutation(api.careerAgent.runNow);
   const runPain = useMutation(api.painAgent.runNow);
   const runProspects = useMutation(api.prospectAgent.runNow);
@@ -156,6 +159,7 @@ export default function Home() {
   const runCoach = useMutation(api.coachAgent.runNow);
   const runBriefing = useMutation(api.briefingAgent.runNow);
   const runAutopilot = useMutation(api.autopilot.runNow);
+  const runReplies = useMutation(api.replies.runNow);
 
   const requestRefresh = useMutation(api.home.requestRefresh);
 
@@ -461,7 +465,29 @@ export default function Home() {
                 )}
               </AgentTile>
 
-              <AgentTile index="06" name="Solution Designer" color={C.designer} href="/radar" when="ON DEMAND">
+              <AgentTile
+                index="06"
+                name="Replies"
+                color={C.replies}
+                href="/replies"
+                worker={worker("Reply Agent")}
+                when={data.gmail.status === "connected" ? when("Reply Agent") : "GMAIL OFF"}
+                run={data.gmail.status === "connected" ? { running: running("Reply Agent"), onRun: () => runReplies() } : undefined}
+              >
+                <Metric value={data.replies.new} unit="need an answer" />
+                <span className="flex gap-1.5 text-[13px] text-hud-muted">
+                  <Inbox className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: C.replies }} />
+                  <span className="truncate">
+                    {data.gmail.status !== "connected"
+                      ? "Connect Gmail to read prospect replies"
+                      : data.replies.last
+                        ? `Last: ${data.replies.last.from} · ${data.replies.last.category.replace("_", " ")}`
+                        : "No replies yet"}
+                  </span>
+                </span>
+              </AgentTile>
+
+              <AgentTile index="07" name="Solution Designer" color={C.designer} href="/radar" when="ON DEMAND">
                 <Metric value={data.designer.designsThisWeek} unit="designs this week" />
                 <span className="flex gap-1.5 text-[13px] text-hud-muted">
                   <Lightbulb className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -495,7 +521,7 @@ export default function Home() {
                 </tr>
               </thead>
               <tbody>
-                {data.workers.map((w) => {
+                {(telemetry ?? data.workers.map((w) => ({ ...w, lastRuns: [] as string[] }))).map((w) => {
                   const schedule = SCHEDULES[w.name];
                   const status = w.status === "running" ? "RUNNING" : w.lastError ? "ERROR" : "IDLE";
                   const statusCls =

@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import { internalAction, internalMutation, internalQuery, mutation, query, type MutationCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
@@ -13,9 +13,10 @@ import { paginationOptsValidator } from "convex/server";
 //   mode "auto"  → runs by itself, up to a daily cap
 // A global Pause switch stops everything. Every action is logged with its result.
 //
-// Today's actions only write things inside your system (kits, solution docs, follow-up
-// drafts). Actions that leave your system (sending emails, applying) are listed but
-// stay locked until Gmail is connected.
+// Actions that only write inside your system (kits, solution docs, drafts) work
+// right away. Actions that send email unlock once Gmail is connected, only send on
+// weekdays between 14:00 and 23:00 PKT (UK/US business hours), and are spaced out
+// a few minutes apart so they look like a person sending, not a blast.
 // =============================================================================
 
 export type Mode = "off" | "draft" | "auto";
@@ -45,12 +46,17 @@ export const POLICIES = {
     minScore: 0,
     available: true,
   },
-  // --- Unlocked once Gmail is connected (next step) ---
-  sendIntro: { label: "Send first emails to ready prospects", agent: "Prospects", defaultMode: "draft" as Mode, dailyCap: 15, minScore: 60, available: false },
-  sendFollowUp: { label: "Send due follow-ups", agent: "Prospects", defaultMode: "draft" as Mode, dailyCap: 20, minScore: 0, available: false },
-  replyTriage: { label: "Read replies and answer simple ones", agent: "Replies", defaultMode: "draft" as Mode, dailyCap: 30, minScore: 0, available: false },
-  applyByEmail: { label: "Apply to jobs that accept email applications", agent: "Career", defaultMode: "draft" as Mode, dailyCap: 5, minScore: 85, available: false },
+  // --- Need Gmail (unlock automatically once it's connected) ---
+  sendIntro: { label: "Send first emails to ready prospects", agent: "Prospects", defaultMode: "draft" as Mode, dailyCap: 15, minScore: 60, available: true, needsGmail: true },
+  sendFollowUp: { label: "Send written follow-ups", agent: "Prospects", defaultMode: "draft" as Mode, dailyCap: 20, minScore: 0, available: true, needsGmail: true },
+  replyTriage: { label: "Answer replies (pricing questions always ask you)", agent: "Replies", defaultMode: "draft" as Mode, dailyCap: 30, minScore: 0, available: true, needsGmail: true },
+  // --- Coming next ---
+  applyByEmail: { label: "Apply to jobs that accept email applications", agent: "Career", defaultMode: "draft" as Mode, dailyCap: 5, minScore: 85, available: false, needsGmail: true },
 } as const;
+
+const SEND_KINDS = new Set(["sendIntro", "sendFollowUp", "replyTriage"]);
+// Cold emails wait for business hours; answers to people who wrote to you go any time
+const COLD_KINDS = new Set(["sendIntro", "sendFollowUp"]);
 
 export type PolicyKey = keyof typeof POLICIES;
 const POLICY_KEYS = Object.keys(POLICIES) as PolicyKey[];
@@ -65,20 +71,36 @@ async function getSettings(ctx: { db: any }) {
   const rows: Doc<"autopilotSettings">[] = await ctx.db.query("autopilotSettings").collect();
   const byKey = new Map(rows.map((r) => [r.key, r]));
   const paused = byKey.get("_global")?.paused ?? false;
+  const gmail = await ctx.db
+    .query("integrations")
+    .withIndex("by_name", (q: any) => q.eq("name", "gmail"))
+    .first();
+  const gmailOk = gmail?.status === "connected";
   const policies = POLICY_KEYS.map((key) => {
     const p = POLICIES[key];
     const row = byKey.get(key);
+    const needsGmail = "needsGmail" in p && p.needsGmail;
+    const available = p.available && (!needsGmail || gmailOk);
     return {
       key,
       label: p.label,
       agent: p.agent,
-      available: p.available,
-      mode: (p.available ? (row?.mode ?? p.defaultMode) : "off") as Mode,
+      available,
+      lockedReason: !p.available ? "Coming next" : !available ? "Connect Gmail to unlock" : null,
+      mode: (available ? (row?.mode ?? p.defaultMode) : "off") as Mode,
       dailyCap: row?.dailyCap ?? p.dailyCap,
       minScore: row?.minScore ?? p.minScore,
     };
   });
-  return { paused, policies };
+  return { paused, policies, gmailOk };
+}
+
+// Weekdays 14:00–23:00 PKT ≈ UK 9:00–18:00 and US East 4:00–13:00
+export function inSendingWindow(now = Date.now()) {
+  const pkt = new Date(now + 5 * 60 * 60 * 1000);
+  const day = pkt.getUTCDay(); // 0 Sun … 6 Sat
+  const hour = pkt.getUTCHours();
+  return day >= 1 && day <= 5 && hour >= 14 && hour < 23;
 }
 
 function startOfTodayPKT(now: number) {
@@ -107,6 +129,7 @@ export const state = query({
       .take(500);
     return {
       paused,
+      sendingWindowOpen: inSendingWindow(),
       pendingCount: pending.length,
       queuedCount: queued.length,
       doneToday: todays.filter((a) => a.status === "done").length,
@@ -157,7 +180,9 @@ export const setPolicy = mutation({
   },
   handler: async (ctx, { key, mode, dailyCap, minScore }) => {
     if (!(key in POLICIES)) throw new Error(`Unknown autopilot action: ${key}`);
-    if (!POLICIES[key as PolicyKey].available) throw new Error("This one unlocks after Gmail is connected");
+    const { policies } = await getSettings(ctx);
+    const policy = policies.find((p) => p.key === key);
+    if (!policy?.available) throw new Error(policy?.lockedReason ?? "Not available yet");
     const row = await ctx.db
       .query("autopilotSettings")
       .withIndex("by_key", (q) => q.eq("key", key))
@@ -204,6 +229,43 @@ export const approveAll = mutation({
   },
 });
 
+// "Send via Gmail" buttons: you decided, so it skips the rules and just queues it
+export const queueNow = mutation({
+  args: { kind: v.union(v.literal("sendIntro"), v.literal("sendFollowUp")), prospectId: v.id("prospects") },
+  handler: async (ctx, { kind, prospectId }) => {
+    const p = await ctx.db.get(prospectId);
+    if (!p?.draft) throw new Error("No draft to send");
+    const targetId = kind === "sendIntro" ? (prospectId as string) : `${prospectId}#${p.draft.kind}`;
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("autopilotActions")
+      .withIndex("by_target", (q) => q.eq("targetId", targetId).eq("kind", kind))
+      .order("desc")
+      .first();
+    if (existing && (existing.status === "queued" || existing.status === "running" || existing.status === "done")) {
+      return { status: existing.status };
+    }
+    if (existing?.status === "pending") {
+      await ctx.db.patch(existing._id, { status: "queued", decidedAt: now, decidedBy: "you" });
+    } else {
+      await ctx.db.insert("autopilotActions", {
+        kind,
+        agent: "Prospects",
+        targetId,
+        title: `${kind === "sendIntro" ? "Email" : "Follow up with"} ${p.name}`,
+        detail: p.contactEmail ? `To ${p.contactEmail}` : undefined,
+        href: "/prospects",
+        status: "queued",
+        createdAt: now,
+        decidedAt: now,
+        decidedBy: "you",
+      });
+    }
+    await ctx.scheduler.runAfter(0, internal.autopilot.processQueue, {});
+    return { status: "queued", waitsForWindow: !inSendingWindow() };
+  },
+});
+
 // "Run autopilot now" button
 export const runNow = mutation({
   args: {},
@@ -214,6 +276,55 @@ export const runNow = mutation({
 
 // ---------------------------------------------------------------- the gate
 
+type ProposeArgs = {
+  kind: string;
+  targetId: string;
+  title: string;
+  detail?: string;
+  href?: string;
+  forceApproval?: boolean; // e.g. pricing questions: always wait for you, even in Auto
+};
+
+// Shared by every agent that wants Autopilot to do something
+export async function proposeAction(ctx: MutationCtx, a: ProposeArgs): Promise<"queued" | "pending" | "skipped"> {
+  const { paused, policies } = await getSettings(ctx);
+  const policy = policies.find((p) => p.key === a.kind);
+  if (!policy || policy.mode === "off") return "skipped";
+
+  // Never repeat work: skip if this exact thing was already proposed
+  // (a failed attempt may retry after a day; a rejected one never comes back)
+  const existing = await ctx.db
+    .query("autopilotActions")
+    .withIndex("by_target", (q) => q.eq("targetId", a.targetId).eq("kind", a.kind))
+    .order("desc")
+    .first();
+  if (existing && !(existing.status === "failed" && Date.now() - existing.createdAt > DAY)) return "skipped";
+
+  // Daily cap (what was queued/done today, plus what's waiting for you)
+  const today = startOfTodayPKT(Date.now());
+  const todays = await ctx.db
+    .query("autopilotActions")
+    .withIndex("by_kind", (q) => q.eq("kind", a.kind).gte("createdAt", today))
+    .take(200);
+  const used = todays.filter((x) => ["queued", "running", "done", "pending"].includes(x.status)).length;
+  if (used >= policy.dailyCap && !a.forceApproval) return "skipped";
+
+  // Paused: nothing runs by itself, but things that need you still show up for approval
+  const status = policy.mode === "auto" && !a.forceApproval && !paused ? "queued" : "pending";
+  await ctx.db.insert("autopilotActions", {
+    kind: a.kind,
+    agent: policy.agent,
+    targetId: a.targetId,
+    title: a.title,
+    detail: a.detail,
+    href: a.href,
+    status,
+    createdAt: Date.now(),
+    ...(status === "queued" && { decidedBy: "autopilot", decidedAt: Date.now() }),
+  });
+  return status;
+}
+
 export const propose = internalMutation({
   args: {
     kind: v.string(),
@@ -221,43 +332,12 @@ export const propose = internalMutation({
     title: v.string(),
     detail: v.optional(v.string()),
     href: v.optional(v.string()),
+    forceApproval: v.optional(v.boolean()),
   },
   handler: async (ctx, a): Promise<"queued" | "pending" | "skipped"> => {
-    const { paused, policies } = await getSettings(ctx);
-    const policy = policies.find((p) => p.key === a.kind);
-    if (paused || !policy || policy.mode === "off") return "skipped";
-
-    // Never repeat work: skip if this exact thing was already proposed
-    // (a failed attempt may retry after a day; a rejected one never comes back)
-    const existing = await ctx.db
-      .query("autopilotActions")
-      .withIndex("by_target", (q) => q.eq("targetId", a.targetId).eq("kind", a.kind))
-      .order("desc")
-      .first();
-    if (existing && !(existing.status === "failed" && Date.now() - existing.createdAt > DAY)) return "skipped";
-
-    // Daily cap (counts what was queued/done today, plus what's waiting for you)
-    const today = startOfTodayPKT(Date.now());
-    const todays = await ctx.db
-      .query("autopilotActions")
-      .withIndex("by_kind", (q) => q.eq("kind", a.kind).gte("createdAt", today))
-      .take(200);
-    const used = todays.filter((x) => ["queued", "running", "done", "pending"].includes(x.status)).length;
-    if (used >= policy.dailyCap) return "skipped";
-
-    const status = policy.mode === "auto" ? "queued" : "pending";
-    await ctx.db.insert("autopilotActions", {
-      kind: a.kind,
-      agent: policy.agent,
-      targetId: a.targetId,
-      title: a.title,
-      detail: a.detail,
-      href: a.href,
-      status,
-      createdAt: Date.now(),
-      ...(status === "queued" && { decidedBy: "autopilot", decidedAt: Date.now() }),
-    });
-    return status;
+    const { paused } = await getSettings(ctx);
+    if (paused) return "skipped";
+    return await proposeAction(ctx, a);
   },
 });
 
@@ -317,9 +397,57 @@ export const sweep = internalAction({
       }
     }
 
+    // Prospects: first emails ready to go
+    const intro = mode("sendIntro");
+    if (intro && intro.mode !== "off") {
+      const ready: { _id: string; name: string; email: string; fit: number }[] = await ctx.runQuery(
+        internal.autopilot.introCandidates,
+        { minScore: intro.minScore }
+      );
+      for (const p of ready.slice(0, 30)) {
+        await add("sendIntro", p._id, `Email ${p.name}`, `To ${p.email} · fit ${p.fit}`, "/prospects");
+      }
+    }
+
+    // Prospects: written follow-ups waiting to be sent
+    const sendFu = mode("sendFollowUp");
+    if (sendFu && sendFu.mode !== "off") {
+      const fus: { _id: string; name: string; kind: string }[] = await ctx.runQuery(internal.autopilot.followUpSendCandidates, {});
+      for (const p of fus) {
+        await add("sendFollowUp", `${p._id}#${p.kind}`, `Send ${p.kind === "followup1" ? "follow-up 1" : "follow-up 2"}: ${p.name}`, undefined, "/prospects");
+      }
+    }
+
     // Do the work in a separate run, so finding + doing never hit the 10-minute limit together
     await ctx.scheduler.runAfter(0, internal.autopilot.processQueue, {});
     return { proposed };
+  },
+});
+
+export const introCandidates = internalQuery({
+  args: { minScore: v.number() },
+  handler: async (ctx, { minScore }) => {
+    const rows = await ctx.db
+      .query("prospects")
+      .withIndex("by_status", (q) => q.eq("status", "Ready"))
+      .take(500);
+    return rows
+      .filter((p) => p.draft?.kind === "intro" && p.contactEmail && (p.fitScore ?? 0) >= minScore)
+      .sort((a, b) => (b.fitScore ?? 0) - (a.fitScore ?? 0))
+      .map((p) => ({ _id: p._id as string, name: p.name, email: p.contactEmail!, fit: p.fitScore ?? 0 }));
+  },
+});
+
+export const followUpSendCandidates = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const rows = await ctx.db
+      .query("prospects")
+      .withIndex("by_status", (q) => q.eq("status", "Contacted"))
+      .take(500);
+    return rows
+      .filter((p) => p.contactEmail && p.draft && p.draft.kind !== "intro")
+      .map((p) => ({ _id: p._id as string, name: p.name, kind: p.draft!.kind }));
   },
 });
 
@@ -334,7 +462,7 @@ export const kitCandidates = internalQuery({
     const res = await ctx.db
       .query("jobs")
       .withIndex("by_status", (q) => q.eq("status", "Saved"))
-      .paginate({ cursor, numItems: 100 });
+      .paginate({ cursor, numItems: 20 }); // small pages: jobs carry long descriptions
     return {
       items: res.page
         .filter((j) => j.source && !j.kit && j.recommendation !== "Skip" && j.matchScore >= minScore)
@@ -398,17 +526,27 @@ export const processQueue = internalAction({
     let done = 0;
     let failed = 0;
     let stopNote: string | null = null;
+    let sentThisRun = false;
 
     try {
       for (let i = 0; i < MAX_PER_RUN && Date.now() - t0 < RUN_BUDGET_MS; i++) {
-        const next: Doc<"autopilotActions"> | null = await ctx.runMutation(internal.autopilot.claimNext, {});
+        const next: Doc<"autopilotActions"> | null = await ctx.runMutation(internal.autopilot.claimNext, {
+          allowCold: inSendingWindow() && !sentThisRun,
+          allowReplies: !sentThisRun,
+        });
         if (!next) break;
         try {
           const result = await execute(ctx, next);
           await ctx.runMutation(internal.autopilot.finish, { id: next._id, status: "done", result });
           done++;
+          if (SEND_KINDS.has(next.kind)) sentThisRun = true; // one email per run → natural spacing
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
+          if (/Gmail sign-in expired|Gmail refused|Gmail is not connected|GMAIL_ADDRESS is not set/i.test(msg)) {
+            await ctx.runMutation(internal.autopilot.finish, { id: next._id, status: "queued", result: msg });
+            stopNote = msg;
+            break;
+          }
           if (/limit reached/i.test(msg)) {
             // Groq daily quota: put it back and stop for now
             await ctx.runMutation(internal.autopilot.finish, { id: next._id, status: "queued", result: msg });
@@ -428,10 +566,14 @@ export const processQueue = internalAction({
       });
     }
 
-    // More waiting? Continue in a minute (fresh 10-minute budget)
+    // More waiting? Continue soon (fresh 10-minute budget).
+    // After an email, wait 3–8 random minutes so sends are spread out.
     if (!stopNote) {
-      const more: boolean = await ctx.runQuery(internal.autopilot.hasQueued, {});
-      if (more) await ctx.scheduler.runAfter(60 * 1000, internal.autopilot.processQueue, {});
+      const more: { any: boolean; nonSend: boolean } = await ctx.runQuery(internal.autopilot.hasQueued, {});
+      if (more.nonSend || (more.any && inSendingWindow())) {
+        const delay = sentThisRun ? (3 + Math.random() * 5) * 60 * 1000 : 60 * 1000;
+        await ctx.scheduler.runAfter(delay, internal.autopilot.processQueue, {});
+      }
     }
     return { done, failed };
   },
@@ -457,19 +599,33 @@ async function execute(ctx: any, a: Doc<"autopilotActions">): Promise<string> {
       await ctx.runAction(api.prospectAgent.draftFollowUp, { id });
       return "Follow-up drafted — open Prospects to send it";
     }
+    case "sendIntro": {
+      return await ctx.runAction(internal.outbox.sendProspectEmail, { id: a.targetId as Id<"prospects">, expect: "intro" });
+    }
+    case "sendFollowUp": {
+      const id = a.targetId.split("#")[0] as Id<"prospects">;
+      return await ctx.runAction(internal.outbox.sendProspectEmail, { id, expect: "followup" });
+    }
+    case "replyTriage": {
+      return await ctx.runAction(internal.outbox.sendReply, { inboundId: a.targetId as Id<"inboundEmails"> });
+    }
     default:
       throw new Error(`No executor for "${a.kind}" yet`);
   }
 }
 
 export const claimNext = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const next = await ctx.db
+  args: { allowCold: v.optional(v.boolean()), allowReplies: v.optional(v.boolean()) },
+  handler: async (ctx, { allowCold, allowReplies }) => {
+    const queued = await ctx.db
       .query("autopilotActions")
       .withIndex("by_status", (q) => q.eq("status", "queued"))
       .order("asc")
-      .first();
+      .take(100);
+    // Cold emails wait for the sending window; one email per run; everything else any time
+    const next = queued.find((a) =>
+      COLD_KINDS.has(a.kind) ? !!allowCold : SEND_KINDS.has(a.kind) ? !!allowReplies : true
+    );
     if (!next) return null;
     await ctx.db.patch(next._id, { status: "running", startedAt: Date.now() });
     return { ...next, status: "running" as const };
@@ -489,11 +645,13 @@ export const finish = internalMutation({
 
 export const hasQueued = internalQuery({
   args: {},
-  handler: async (ctx) =>
-    !!(await ctx.db
+  handler: async (ctx) => {
+    const queued = await ctx.db
       .query("autopilotActions")
       .withIndex("by_status", (q) => q.eq("status", "queued"))
-      .first()),
+      .take(100);
+    return { any: queued.length > 0, nonSend: queued.some((a) => !COLD_KINDS.has(a.kind)) };
+  },
 });
 
 // Watchdog: an action stuck in "running" (computer slept) goes back to the queue

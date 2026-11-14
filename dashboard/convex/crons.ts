@@ -10,6 +10,9 @@ crons.interval("reset stuck agents", { minutes: 30 }, internal.agentStatus.reset
 crons.interval("autopilot sweep", { hours: 1 }, internal.autopilot.sweep, {});
 crons.interval("autopilot unstick", { minutes: 30 }, internal.autopilot.unstick, {});
 
+// Every 30 min — Reply Agent reads prospect replies in Gmail (does nothing until Gmail is connected)
+crons.interval("reply agent", { minutes: 30 }, internal.replies.check, {});
+
 // Every 5 min — rebuild the home screen summary in small pages (keeps queries under 1s)
 crons.interval("home snapshot", { minutes: 5 }, internal.home.refresh, {});
 

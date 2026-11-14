@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useConvexConnectionState, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
-import { Bot, Briefcase, GraduationCap, LayoutGrid, Mail, Radar, TrendingUp, Zap } from "lucide-react";
+import { Bot, Briefcase, GraduationCap, Inbox, LayoutGrid, Mail, Radar, TrendingUp, Zap } from "lucide-react";
 
 type NavItem = {
   href: string;
@@ -26,6 +26,7 @@ export default function Sidebar() {
     { href: "/career", label: "Career", icon: Briefcase, count: data?.career.open, color: "text-[#5eead4]" },
     { href: "/radar", label: "Radar", icon: Radar, count: data?.radar.readyToDesign, color: "text-[#fbbf24]" },
     { href: "/prospects", label: "Prospects", icon: Mail, count: data?.prospects.ready, color: "text-[#a78bfa]" },
+    { href: "/replies", label: "Replies", icon: Inbox, count: data?.replies.new, color: "text-[#e879f9]" },
     { href: "/trends", label: "Trend Scout", icon: TrendingUp },
     { href: "/coach", label: "Coach", icon: GraduationCap },
     { href: "/agents", label: "AI Workers", icon: Bot },
@@ -75,6 +76,16 @@ export default function Sidebar() {
         <span className="flex justify-between">
           DB
           <span className={online ? "text-hud-accent" : "text-red-400"}>{online ? "CONVEX · LIVE" : "OFFLINE"}</span>
+        </span>
+        <span className="flex justify-between">
+          GMAIL
+          <span
+            className={
+              data?.gmail.status === "connected" ? "text-hud-accent" : data?.gmail.status === "error" ? "text-red-400" : "text-hud-dim"
+            }
+          >
+            {data?.gmail.status === "connected" ? "LINKED" : data?.gmail.status === "error" ? "RE-LOGIN" : "OFF"}
+          </span>
         </span>
         <span className="flex justify-between">
           RUNS / 24H<span className="text-hud-text">{data?.runs24h ?? "–"}</span>

@@ -72,6 +72,9 @@ export default function ProspectsPage() {
   );
 
   const runAgent = useMutation(api.prospectAgent.runNow);
+  const gmail = useQuery(api.gmail.status);
+  const queueSend = useMutation(api.autopilot.queueNow);
+  const gmailOn = gmail?.status === "connected";
   const markSent = useMutation(api.prospectCrm.markSent);
   const setProspectStatus = useMutation(api.prospectCrm.setStatus);
   const redraft = useAction(api.prospectAgent.redraft);
@@ -103,7 +106,10 @@ export default function ProspectsPage() {
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-semibold"><Send className="h-6 w-6" /> Prospect Engine</h1>
           <p className="mt-1 text-sm text-zinc-400">
-            Small US/UK agencies, researched from their own websites. You review, click “Open in Gmail”, and send.
+            Small US/UK agencies, researched from their own websites.{" "}
+            {gmailOn
+              ? "“Send via Gmail” sends it for you (weekdays 14:00–23:00 PKT); Autopilot can do it on its own."
+              : "You review, click “Open in Gmail”, and send."}
           </p>
         </div>
         <button onClick={() => runAgent()} className="flex items-center gap-1 rounded-md border border-zinc-700 px-3 py-1.5 text-sm hover:bg-zinc-800">
@@ -226,15 +232,41 @@ export default function ProspectsPage() {
                         {isOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />} {d ? "Email & research" : "Research"}
                       </button>
                     )}
+                    {d && p.contactEmail && gmailOn && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setNotice(null);
+                          try {
+                            const r: any = await queueSend({
+                              kind: d.kind === "intro" ? "sendIntro" : "sendFollowUp",
+                              prospectId: id,
+                            });
+                            setNotice(
+                              r?.waitsForWindow
+                                ? `Queued “${d.subject}” — it goes out in the next sending window (weekdays 14:00–23:00 PKT).`
+                                : `Queued “${d.subject}” — sending within a few minutes.`
+                            );
+                          } catch (e) {
+                            setNotice(e instanceof Error ? e.message : String(e));
+                          }
+                        }}
+                        className="flex items-center gap-1 rounded-md bg-[#5eead4] px-2 py-1 text-xs font-semibold text-zinc-950 hover:bg-[#99f6e4]"
+                      >
+                        <Send className="h-3 w-3" /> Send via Gmail
+                      </button>
+                    )}
                     {d && p.contactEmail && (
                       <a
                         href={gmailUrl(p.contactEmail, d.subject, d.body)}
                         target="_blank"
                         rel="noreferrer"
                         onClick={() => markSent({ id })}
-                        className="flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-900 hover:bg-white"
+                        className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs ${
+                          gmailOn ? "border border-zinc-700 text-zinc-400 hover:bg-zinc-800" : "bg-zinc-100 font-medium text-zinc-900 hover:bg-white"
+                        }`}
                       >
-                        <Mail className="h-3 w-3" /> Open in Gmail
+                        <Mail className="h-3 w-3" /> {gmailOn ? "Send it myself" : "Open in Gmail"}
                       </a>
                     )}
                     {d && !p.contactEmail && (

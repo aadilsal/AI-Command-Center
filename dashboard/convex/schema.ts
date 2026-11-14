@@ -274,9 +274,14 @@ export default defineSchema({
     sentEmails: v.optional(v.array(v.object({ kind: v.string(), subject: v.string(), sentAt: v.number() }))),
     lastContactAt: v.optional(v.number()),
     followUpsSent: v.optional(v.number()),
+    // Gmail (set when Autopilot sends), so follow-ups thread and replies match
+    gmailThreadId: v.optional(v.string()),
+    gmailMessageIds: v.optional(v.array(v.string())),
+    repliedAt: v.optional(v.number()),
   })
     .index("by_domain", ["domain"])
-    .index("by_status", ["status"]),
+    .index("by_status", ["status"])
+    .index("by_thread", ["gmailThreadId"]),
 
   prospectTargets: defineTable({
     city: v.string(),
@@ -335,6 +340,51 @@ export default defineSchema({
     lastNote: v.optional(v.string()), // informational, self-healing (grey)
     lastNoteAt: v.optional(v.number()),
   }).index("by_name", ["name"]),
+
+  // Connected services (Gmail): status shown on the dashboard. Secrets live in env vars, never here.
+  integrations: defineTable({
+    name: v.string(),
+    status: v.union(v.literal("connected"), v.literal("error"), v.literal("missing")),
+    email: v.optional(v.string()),
+    lastError: v.optional(v.string()),
+    checkedAt: v.number(),
+  }).index("by_name", ["name"]),
+
+  // Do-not-contact list: emails ("a@b.com") or whole domains ("@b.com"). Opt-outs and bounces land here.
+  suppressions: defineTable({
+    value: v.string(),
+    reason: v.string(),
+    createdAt: v.number(),
+  }).index("by_value", ["value"]),
+
+  // Replies from prospects (only prospect conversations are stored, never personal mail)
+  inboundEmails: defineTable({
+    gmailId: v.string(),
+    threadId: v.string(),
+    prospectId: v.optional(v.id("prospects")),
+    fromEmail: v.string(),
+    fromName: v.string(),
+    subject: v.string(),
+    body: v.string(),
+    messageId: v.optional(v.string()),
+    references: v.optional(v.string()),
+    receivedAt: v.number(),
+    category: v.string(),
+    summary: v.string(),
+    status: v.union(v.literal("new"), v.literal("handled"), v.literal("ignored")),
+    replyDraft: v.optional(v.object({ subject: v.string(), body: v.string() })),
+    handledAt: v.optional(v.number()),
+    sentReplyAt: v.optional(v.number()),
+  })
+    .index("by_gmailId", ["gmailId"])
+    .index("by_status", ["status", "receivedAt"])
+    .index("by_receivedAt", ["receivedAt"]),
+
+  // Inbox message ids the Reply Agent already looked at (ids only, no content)
+  seenMail: defineTable({
+    gmailId: v.string(),
+    at: v.number(),
+  }).index("by_gmailId", ["gmailId"]),
 
   // Autopilot (see convex/autopilot.ts): your settings per action + the global Pause switch
   autopilotSettings: defineTable({
