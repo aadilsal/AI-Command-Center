@@ -6,6 +6,9 @@ const crons = cronJobs();
 // Every 30 min — un-stick any agent whose run died (e.g. computer slept mid-run)
 crons.interval("reset stuck agents", { minutes: 30 }, internal.agentStatus.resetStuck, {});
 
+// Every 5 min — rebuild the home screen summary in small pages (keeps queries under 1s)
+crons.interval("home snapshot", { minutes: 5 }, internal.home.refresh, {});
+
 // Every 6 hours — collect pain signals and analyze the backlog
 crons.interval("pain agent", { hours: 6 }, internal.painAgent.run, {});
 

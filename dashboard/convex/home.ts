@@ -1,69 +1,58 @@
-import { query } from "./_generated/server";
+import { v } from "convex/values";
+import { internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { getCounter } from "./counters";
 
-// One small query that feeds the whole home screen (HUD).
-// It only sends short summaries to the browser: full lists live on the detail pages.
+// Home screen (HUD) data.
+//
+// Counting every job / problem / prospect inside one query blew Convex's 1-second limit.
+// So the heavy part is now built in the background by an ACTION that reads the tables in
+// small pages and saves one small "snapshot" row. The page reads that row instantly.
+// Only cheap, live things (agent status, last runs) are read fresh on every request.
 
 const HOUR = 60 * 60 * 1000;
+const PAGE = 100;
 const MIN_EVIDENCE_TO_DESIGN = 2;
+const STALE_MS = 60 * 1000; // a page visit refreshes the snapshot if it's older than this
+
+const EMPTY = {
+  career: { open: 0, applied: 0, interview: 0, topJobs: [] as TopJob[], foundPerDay: [0, 0, 0, 0, 0, 0, 0] },
+  radar: { active: 0, withSolution: 0, readyToDesign: 0, pendingSignals: 0, top: null as TopProblem | null },
+  designer: { designsThisWeek: 0, parked: 0, latest: null as { name: string; problem: string } | null },
+  prospects: { total: 0, ready: 0, contacted: 0, replied: 0, sources: {} as Record<string, number> },
+  coach: null as { createdAt: number; focus: string; headline: string } | null,
+  trend: null as { createdAt: number; trends: string[]; idea: string | null } | null,
+  briefing: null as {
+    date: string;
+    createdAt: number;
+    headline: string;
+    actions: { title: string; why: string; kind: string; url?: string }[];
+  } | null,
+};
+
+type TopJob = {
+  _id: string;
+  title: string;
+  company: string;
+  location?: string;
+  source?: string;
+  url: string;
+  matchScore: number;
+  hasKit: boolean;
+  foundAt: number;
+};
+type TopProblem = { _id: string; title: string; score: number; signalCount: number; hasSolution: boolean };
+type Snapshot = typeof EMPTY;
+
+// ---------------------------------------------------------------------------
+// 1) What the page reads: snapshot (instant) + live worker status (small)
 
 export const overview = query({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
+    const snap = await ctx.db.query("homeSnapshot").first();
 
-    // ---------- Career (index reads, never the archived pile)
-    const saved = await ctx.db
-      .query("jobs")
-      .withIndex("by_status", (q) => q.eq("status", "Saved"))
-      .collect();
-    const open = saved.filter((j) => j.source && j.recommendation !== "Skip");
-    const topJobs = [...open]
-      .sort((a, b) => b.matchScore - a.matchScore)
-      .slice(0, 5)
-      .map((j) => ({
-        _id: j._id,
-        title: j.title,
-        company: j.company,
-        location: j.location,
-        source: j.source,
-        url: j.url,
-        matchScore: j.matchScore,
-        hasKit: !!j.kit,
-        foundAt: j.foundAt ?? j._creationTime,
-      }));
-    const applied = (await ctx.db.query("jobs").withIndex("by_status", (q) => q.eq("status", "Applied")).collect()).length;
-    const interview = (await ctx.db.query("jobs").withIndex("by_status", (q) => q.eq("status", "Interview")).collect()).length;
-    // Jobs found per day, last 7 days (for the little bar chart)
-    const foundPerDay = Array.from({ length: 7 }, (_, i) => {
-      const start = now - (7 - i) * 24 * HOUR;
-      const end = start + 24 * HOUR;
-      return saved.filter((j) => {
-        const t = j.foundAt ?? j._creationTime;
-        return t >= start && t < end;
-      }).length;
-    });
-
-    // ---------- Opportunity Radar + Solution Designer
-    const problems = await ctx.db.query("problems").collect();
-    const active = problems.filter((p) => p.status !== "Parked");
-    const topProblem = [...active].sort((a, b) => b.score - a.score)[0];
-    const weekAgo = now - 7 * 24 * HOUR;
-
-    // ---------- Prospects
-    const prospects = await ctx.db.query("prospects").collect();
-    const pCount = (s: string) => prospects.filter((p) => p.status === s).length;
-    const sources: Record<string, number> = {};
-    for (const p of prospects) sources[p.source] = (sources[p.source] ?? 0) + 1;
-
-    // ---------- Coach + Trend Scout (latest report only)
-    const coach = await ctx.db.query("coachReports").withIndex("by_createdAt").order("desc").first();
-    const trend = await ctx.db.query("trendReports").withIndex("by_createdAt").order("desc").first();
-
-    // ---------- Briefing
-    const briefing = await ctx.db.query("briefings").withIndex("by_date").order("desc").first();
-
-    // ---------- Workers: status + last 7 runs each
     const agents = (await ctx.db.query("agents").collect()).filter((a) => a.status !== "disabled");
     const workers = [];
     for (const a of agents) {
@@ -85,36 +74,239 @@ export const overview = query({
       await ctx.db
         .query("agentRuns")
         .withIndex("by_startedAt", (q) => q.gte("startedAt", now - 24 * HOUR))
-        .collect()
+        .take(500)
     ).length;
 
     return {
-      career: { open: open.length, applied, interview, topJobs, foundPerDay },
-      radar: {
-        active: active.length,
-        withSolution: active.filter((p) => p.solution).length,
-        readyToDesign: active.filter((p) => !p.solution && p.signalCount >= MIN_EVIDENCE_TO_DESIGN).length,
-        pendingSignals: await getCounter(ctx, "pendingSignals"),
-        top: topProblem
-          ? { _id: topProblem._id, title: topProblem.title, score: topProblem.score, signalCount: topProblem.signalCount, hasSolution: !!topProblem.solution }
-          : null,
-      },
-      designer: {
-        designsThisWeek: problems.filter((p) => p.solution && p.solution.generatedAt >= weekAgo).length,
-        parked: problems.filter((p) => p.status === "Parked").length,
-        latest: problems
-          .filter((p) => p.solution)
-          .sort((a, b) => b.solution!.generatedAt - a.solution!.generatedAt)
-          .slice(0, 1)
-          .map((p) => ({ name: p.solution!.name, problem: p.title }))[0] ?? null,
-      },
-      prospects: {
-        total: prospects.length,
-        ready: pCount("Ready"),
-        contacted: pCount("Contacted"),
-        replied: pCount("Replied") + pCount("Meeting") + pCount("Won"),
-        sources,
-      },
+      ...((snap?.data as Snapshot | undefined) ?? EMPTY),
+      snapshotAt: snap?.updatedAt ?? null,
+      workers,
+      runs24h,
+      agentErrors: workers.filter((w) => w.lastError).length,
+    };
+  },
+});
+
+// Called by the home page when it opens: rebuild the snapshot if it's old.
+export const requestRefresh = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const snap = await ctx.db.query("homeSnapshot").first();
+    const now = Date.now();
+    if (snap && now - snap.updatedAt < STALE_MS) return { scheduled: false };
+    if (snap?.refreshingAt && now - snap.refreshingAt < 2 * 60 * 1000) return { scheduled: false };
+    if (snap) await ctx.db.patch(snap._id, { refreshingAt: now });
+    await ctx.scheduler.runAfter(0, internal.home.refresh, {});
+    return { scheduled: true };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// 2) Background builder (cron every 5 min + on page visit)
+
+export const refresh = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const weekAgo = now - 7 * 24 * HOUR;
+
+    // ----- Career: walk "Saved" jobs page by page, keep only small fields
+    let open = 0;
+    let top: TopJob[] = [];
+    const foundPerDay = [0, 0, 0, 0, 0, 0, 0];
+    let cursor: string | null = null;
+    do {
+      const res: { items: (TopJob & { openMatch: boolean })[]; cursor: string; isDone: boolean } =
+        await ctx.runQuery(internal.home.jobsChunk, { status: "Saved", cursor });
+      for (const j of res.items) {
+        const dayIndex = 6 - Math.floor((now - j.foundAt) / (24 * HOUR));
+        if (dayIndex >= 0 && dayIndex <= 6) foundPerDay[dayIndex]++;
+        if (!j.openMatch) continue;
+        open++;
+        top.push(j);
+      }
+      top = top.sort((a, b) => b.matchScore - a.matchScore).slice(0, 5);
+      cursor = res.isDone ? null : res.cursor;
+    } while (cursor);
+
+    const applied: number = await ctx.runAction(internal.home.countJobs, { status: "Applied" });
+    const interview: number = await ctx.runAction(internal.home.countJobs, { status: "Interview" });
+
+    // ----- Radar + Solution Designer
+    let active = 0;
+    let withSolution = 0;
+    let readyToDesign = 0;
+    let parked = 0;
+    let designsThisWeek = 0;
+    let topProblem: TopProblem | null = null;
+    let latest: { name: string; problem: string; at: number } | null = null;
+    cursor = null;
+    do {
+      const res: {
+        items: {
+          _id: string;
+          title: string;
+          score: number;
+          signalCount: number;
+          status?: string;
+          solutionName: string | null;
+          solutionAt: number | null;
+        }[];
+        cursor: string;
+        isDone: boolean;
+      } = await ctx.runQuery(internal.home.problemsChunk, { cursor });
+      for (const p of res.items) {
+        if (p.solutionAt && p.solutionAt >= weekAgo) designsThisWeek++;
+        if (p.solutionName && p.solutionAt && (!latest || p.solutionAt > latest.at)) {
+          latest = { name: p.solutionName, problem: p.title, at: p.solutionAt };
+        }
+        if (p.status === "Parked") {
+          parked++;
+          continue;
+        }
+        active++;
+        if (p.solutionName) withSolution++;
+        else if (p.signalCount >= MIN_EVIDENCE_TO_DESIGN) readyToDesign++;
+        if (!topProblem || p.score > topProblem.score) {
+          topProblem = { _id: p._id, title: p.title, score: p.score, signalCount: p.signalCount, hasSolution: !!p.solutionName };
+        }
+      }
+      cursor = res.isDone ? null : res.cursor;
+    } while (cursor);
+
+    // ----- Prospects
+    const prospects = { total: 0, ready: 0, contacted: 0, replied: 0, sources: {} as Record<string, number> };
+    cursor = null;
+    do {
+      const res: { items: { status?: string; source: string }[]; cursor: string; isDone: boolean } =
+        await ctx.runQuery(internal.home.prospectsChunk, { cursor });
+      for (const p of res.items) {
+        prospects.total++;
+        if (p.status === "Ready") prospects.ready++;
+        if (p.status === "Contacted") prospects.contacted++;
+        if (p.status === "Replied" || p.status === "Meeting" || p.status === "Won") prospects.replied++;
+        prospects.sources[p.source] = (prospects.sources[p.source] ?? 0) + 1;
+      }
+      cursor = res.isDone ? null : res.cursor;
+    } while (cursor);
+
+    // ----- Small things: latest reports, briefing, counter
+    const small: Pick<Snapshot, "coach" | "trend" | "briefing"> & { pendingSignals: number } = await ctx.runQuery(
+      internal.home.smallParts,
+      {}
+    );
+
+    const data: Snapshot = {
+      career: { open, applied, interview, topJobs: top, foundPerDay },
+      radar: { active, withSolution, readyToDesign, pendingSignals: small.pendingSignals, top: topProblem },
+      designer: { designsThisWeek, parked, latest: latest ? { name: latest.name, problem: latest.problem } : null },
+      prospects,
+      coach: small.coach,
+      trend: small.trend,
+      briefing: small.briefing,
+    };
+    await ctx.runMutation(internal.home.saveSnapshot, { data });
+    return { open, active, prospects: prospects.total };
+  },
+});
+
+// Counting Applied / Interview jobs, page by page
+export const countJobs = internalAction({
+  args: { status: v.string() },
+  handler: async (ctx, { status }): Promise<number> => {
+    let n = 0;
+    let cursor: string | null = null;
+    do {
+      const res: { items: unknown[]; cursor: string; isDone: boolean } = await ctx.runQuery(internal.home.jobsChunk, {
+        status,
+        cursor,
+      });
+      n += res.items.length;
+      cursor = res.isDone ? null : res.cursor;
+    } while (cursor);
+    return n;
+  },
+});
+
+// ---------------------------------------------------------------------------
+// 3) Small page readers (each one stays far below the 1s limit)
+
+const jobStatus = v.union(
+  v.literal("Saved"),
+  v.literal("Applied"),
+  v.literal("Interview"),
+  v.literal("Rejected"),
+  v.literal("Offer"),
+  v.literal("Archived")
+);
+
+export const jobsChunk = internalQuery({
+  args: { status: v.string(), cursor: v.union(v.string(), v.null()) },
+  handler: async (ctx, { status, cursor }) => {
+    const s = status as typeof jobStatus.type;
+    const res = await ctx.db
+      .query("jobs")
+      .withIndex("by_status", (q) => q.eq("status", s))
+      .paginate({ cursor, numItems: PAGE });
+    return {
+      items: res.page.map((j) => ({
+        _id: j._id as string,
+        title: j.title,
+        company: j.company,
+        location: j.location,
+        source: j.source,
+        url: j.url,
+        matchScore: j.matchScore,
+        hasKit: !!j.kit,
+        foundAt: j.foundAt ?? j._creationTime,
+        openMatch: !!j.source && j.recommendation !== "Skip",
+      })),
+      cursor: res.continueCursor,
+      isDone: res.isDone,
+    };
+  },
+});
+
+export const problemsChunk = internalQuery({
+  args: { cursor: v.union(v.string(), v.null()) },
+  handler: async (ctx, { cursor }) => {
+    const res = await ctx.db.query("problems").paginate({ cursor, numItems: PAGE });
+    return {
+      items: res.page.map((p) => ({
+        _id: p._id as string,
+        title: p.title,
+        score: p.score,
+        signalCount: p.signalCount,
+        status: p.status as string | undefined,
+        solutionName: p.solution?.name ?? null,
+        solutionAt: p.solution?.generatedAt ?? null,
+      })),
+      cursor: res.continueCursor,
+      isDone: res.isDone,
+    };
+  },
+});
+
+export const prospectsChunk = internalQuery({
+  args: { cursor: v.union(v.string(), v.null()) },
+  handler: async (ctx, { cursor }) => {
+    const res = await ctx.db.query("prospects").paginate({ cursor, numItems: PAGE });
+    return {
+      items: res.page.map((p) => ({ status: p.status as string | undefined, source: p.source })),
+      cursor: res.continueCursor,
+      isDone: res.isDone,
+    };
+  },
+});
+
+export const smallParts = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const coach = await ctx.db.query("coachReports").withIndex("by_createdAt").order("desc").first();
+    const trend = await ctx.db.query("trendReports").withIndex("by_createdAt").order("desc").first();
+    const briefing = await ctx.db.query("briefings").withIndex("by_date").order("desc").first();
+    return {
+      pendingSignals: await getCounter(ctx, "pendingSignals"),
       coach: coach ? { createdAt: coach.createdAt, focus: coach.focusThisWeek, headline: coach.headline } : null,
       trend: trend
         ? {
@@ -124,11 +316,25 @@ export const overview = query({
           }
         : null,
       briefing: briefing
-        ? { date: briefing.date, createdAt: briefing.createdAt, headline: briefing.headline, actions: briefing.actions.slice(0, 6) }
+        ? {
+            date: briefing.date,
+            createdAt: briefing.createdAt,
+            headline: briefing.headline,
+            actions: briefing.actions.slice(0, 6).map((a) => ({ title: a.title, why: a.why, kind: a.kind, url: a.url })),
+          }
         : null,
-      workers,
-      runs24h,
-      agentErrors: workers.filter((w) => w.lastError).length,
     };
+  },
+});
+
+export const saveSnapshot = internalMutation({
+  args: { data: v.any() },
+  handler: async (ctx, { data }) => {
+    const existing = await ctx.db.query("homeSnapshot").first();
+    if (existing) {
+      await ctx.db.patch(existing._id, { data, updatedAt: Date.now(), refreshingAt: undefined });
+    } else {
+      await ctx.db.insert("homeSnapshot", { data, updatedAt: Date.now() });
+    }
   },
 });

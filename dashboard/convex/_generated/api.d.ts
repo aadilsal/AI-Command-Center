@@ -17,6 +17,7 @@ import type * as coachAgent from "../coachAgent.js";
 import type * as counters from "../counters.js";
 import type * as crons from "../crons.js";
 import type * as dashboard from "../dashboard.js";
+import type * as home from "../home.js";
 import type * as jobCrm from "../jobCrm.js";
 import type * as jobSources from "../jobSources.js";
 import type * as jobs from "../jobs.js";
@@ -60,6 +61,7 @@ declare const fullApi: ApiFromModules<{
   counters: typeof counters;
   crons: typeof crons;
   dashboard: typeof dashboard;
+  home: typeof home;
   jobCrm: typeof jobCrm;
   jobSources: typeof jobSources;
   jobs: typeof jobs;

@@ -335,4 +335,11 @@ export default defineSchema({
     lastNote: v.optional(v.string()), // informational, self-healing (grey)
     lastNoteAt: v.optional(v.number()),
   }).index("by_name", ["name"]),
+
+  // Home screen summary, rebuilt in the background (see convex/home.ts)
+  homeSnapshot: defineTable({
+    data: v.any(),
+    updatedAt: v.number(),
+    refreshingAt: v.optional(v.number()),
+  }),
 });

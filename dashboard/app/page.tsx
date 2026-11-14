@@ -152,14 +152,23 @@ export default function Home() {
   const runCoach = useMutation(api.coachAgent.runNow);
   const runBriefing = useMutation(api.briefingAgent.runNow);
 
-  // Re-render every 30s so "3H AGO" / clock stay fresh
-  const [now, setNow] = useState(() => Date.now());
+  const requestRefresh = useMutation(api.home.requestRefresh);
+
+  // The clock starts after the page loads in the browser (Next.js can't prerender Date.now()).
+  // It re-renders every 30s so "3H AGO" / the clock stay fresh.
+  const [now, setNow] = useState(0);
   useEffect(() => {
+    setNow(Date.now());
     const t = setInterval(() => setNow(Date.now()), 30000);
     return () => clearInterval(t);
   }, []);
 
-  if (data === undefined) {
+  // Opening the page rebuilds the summary in the background if it's older than a minute
+  useEffect(() => {
+    requestRefresh().catch(() => {});
+  }, [requestRefresh]);
+
+  if (data === undefined || now === 0) {
     return (
       <main className="flex min-h-screen items-center justify-center text-hud-dim">
         <Loader2 className="h-6 w-6 animate-spin" />
@@ -222,6 +231,7 @@ export default function Home() {
           <div>
             <p className={`mb-1 font-mono text-xs tracking-[0.14em] ${data.agentErrors ? "text-red-400" : "text-hud-accent"}`}>
               {clock.toUpperCase()} PKT · {systemLine}
+              {data.snapshotAt ? ` · SYNCED ${shortAgo(data.snapshotAt)}` : " · BUILDING OVERVIEW…"}
             </p>
             <h1 className="font-display text-[34px] font-semibold tracking-tight">{greeting}, Aadil</h1>
           </div>
