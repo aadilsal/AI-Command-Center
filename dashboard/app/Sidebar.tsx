@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useConvexConnectionState, useQuery } from "convex/react";
@@ -16,9 +17,13 @@ type NavItem = {
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const data = useQuery(api.home.overview);
+  const live = useQuery(api.home.overview);
   const connection = useConvexConnectionState();
-  const online = connection.isWebSocketConnected;
+  // The server can't know the live connection, so only show it once the page is running in the browser
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const online = mounted && connection.isWebSocketConnected;
+  const data = mounted ? live : undefined; // same rule for counts: first render matches the server
 
   const items: NavItem[] = [
     { href: "/", label: "Overview", icon: LayoutGrid },
@@ -75,7 +80,9 @@ export default function Sidebar() {
       <div className="mt-auto hidden flex-col gap-1.5 rounded-lg border border-hud-soft p-3 font-mono text-[11px] tracking-[0.06em] text-hud-dim md:flex">
         <span className="flex justify-between">
           DB
-          <span className={online ? "text-hud-accent" : "text-red-400"}>{online ? "CONVEX · LIVE" : "OFFLINE"}</span>
+          <span className={!mounted ? "text-hud-dim" : online ? "text-hud-accent" : "text-red-400"}>
+            {!mounted ? "…" : online ? "CONVEX · LIVE" : "OFFLINE"}
+          </span>
         </span>
         <span className="flex justify-between">
           GMAIL
