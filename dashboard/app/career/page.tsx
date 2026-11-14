@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { ChevronDown, ChevronUp, ExternalLink, FileText, Loader2, Play, RefreshCw, Search } from "lucide-react";
+import { ChevronDown, ChevronUp, Download, ExternalLink, FileText, Loader2, Mail, Play, RefreshCw, Search } from "lucide-react";
 import { FreshTabs, KitView, NewBadge, Pager, Select, recBadge, timeAgo, useSince } from "../ui";
 
 const PAGE_SIZE = 15;
@@ -57,6 +57,23 @@ export default function CareerPage() {
   const markApplied = useMutation(api.jobCrm.markApplied);
   const runAgent = useMutation(api.careerAgent.runNow);
   const generateKit = useAction(api.applicationKit.generateKit);
+  const makeCv = useAction(api.cvBuilder.make);
+  const [cvBusy, setCvBusy] = useState<string | null>(null);
+
+  // One-page tailored CV (+ cover letter if the job has a kit), opened in a new tab
+  async function tailoredCv(id: string) {
+    setCvBusy(id);
+    setError(null);
+    try {
+      const r = await makeCv({ jobId: id as Id<"jobs"> });
+      if (r.cvUrl) window.open(r.cvUrl, "_blank");
+      if (r.letterUrl) window.open(r.letterUrl, "_blank");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCvBusy(null);
+    }
+  }
 
   const resetPage = <T,>(setter: (v: T) => void) => (v: T) => {
     setter(v);
@@ -253,6 +270,19 @@ export default function CareerPage() {
                       )}
                       {busy === j._id ? "Writing…" : j.kit ? "Regenerate kit" : "Prepare application"}
                     </button>
+                    <button
+                      onClick={() => tailoredCv(j._id)}
+                      disabled={cvBusy === j._id}
+                      className="flex items-center gap-1 rounded-md border border-[#5eead4]/50 px-2 py-1 text-xs text-[#5eead4] hover:bg-[#5eead4]/10 disabled:opacity-50"
+                    >
+                      {cvBusy === j._id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                      {cvBusy === j._id ? "Building…" : "Tailored CV"}
+                    </button>
+                    {j.appliedVia === "email" && (
+                      <span className="flex items-center gap-1 rounded-md bg-[#5eead4]/10 px-2 py-1 text-xs text-[#5eead4]">
+                        <Mail className="h-3 w-3" /> Applied by email{j.applyEmail ? ` to ${j.applyEmail}` : ""}
+                      </span>
+                    )}
                     <a
                       href={j.url}
                       target="_blank"

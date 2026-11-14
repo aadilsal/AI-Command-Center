@@ -18,6 +18,7 @@ import {
   TrendingUp,
   Zap,
   Inbox,
+  FileText,
 } from "lucide-react";
 import { SCHEDULES, formatNext, shortAgo } from "./schedules";
 
@@ -31,6 +32,7 @@ const C = {
   designer: "#93a1ad",
   autopilot: "#fb923c",
   replies: "#e879f9",
+  cv: "#86efac",
 };
 
 const runColor: Record<string, string> = {
@@ -160,6 +162,7 @@ export default function Home() {
   const runBriefing = useMutation(api.briefingAgent.runNow);
   const runAutopilot = useMutation(api.autopilot.runNow);
   const runReplies = useMutation(api.replies.runNow);
+  const syncCv = useMutation(api.cvProjects.syncNow);
 
   const requestRefresh = useMutation(api.home.requestRefresh);
 
@@ -327,7 +330,6 @@ export default function Home() {
               <AgentTile
                 index="00"
                 name="Autopilot"
-                wide
                 color={C.autopilot}
                 href="/autopilot"
                 worker={worker("Autopilot")}
@@ -483,6 +485,24 @@ export default function Home() {
                       : data.replies.last
                         ? `Last: ${data.replies.last.from} · ${data.replies.last.category.replace("_", " ")}`
                         : "No replies yet"}
+                  </span>
+                </span>
+              </AgentTile>
+
+              <AgentTile
+                index="08"
+                name="CV Builder"
+                color={C.cv}
+                href="/cv"
+                worker={worker("CV Builder")}
+                when={when("CV Builder")}
+                run={{ running: running("CV Builder"), onRun: () => syncCv() }}
+              >
+                <Metric value={data.cv.builtThisWeek} unit="tailored CVs this week" />
+                <span className="flex gap-1.5 text-[13px] text-hud-muted">
+                  <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: C.cv }} />
+                  <span className="truncate">
+                    {data.cv.sentThisWeek} sent by email · {data.cv.projects} projects ready
                   </span>
                 </span>
               </AgentTile>

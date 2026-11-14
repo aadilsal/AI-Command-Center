@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useConvexConnectionState, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
-import { Bot, Briefcase, GraduationCap, Inbox, LayoutGrid, Mail, Radar, TrendingUp, Zap } from "lucide-react";
+import { Bot, Briefcase, FileText, GraduationCap, Inbox, LayoutGrid, Mail, Radar, TrendingUp, Zap } from "lucide-react";
 
 type NavItem = {
   href: string;
@@ -29,6 +29,7 @@ export default function Sidebar() {
     { href: "/", label: "Overview", icon: LayoutGrid },
     { href: "/autopilot", label: "Autopilot", icon: Zap, count: data?.autopilot.pending, color: "text-[#fb923c]" },
     { href: "/career", label: "Career", icon: Briefcase, count: data?.career.open, color: "text-[#5eead4]" },
+    { href: "/cv", label: "CV Builder", icon: FileText },
     { href: "/radar", label: "Radar", icon: Radar, count: data?.radar.readyToDesign, color: "text-[#fbbf24]" },
     { href: "/prospects", label: "Prospects", icon: Mail, count: data?.prospects.ready, color: "text-[#a78bfa]" },
     { href: "/replies", label: "Replies", icon: Inbox, count: data?.replies.new, color: "text-[#e879f9]" },
