@@ -42,12 +42,14 @@ import type * as prospectCrm from "../prospectCrm.js";
 import type * as prospectSources from "../prospectSources.js";
 import type * as replies from "../replies.js";
 import type * as resumes from "../resumes.js";
+import type * as retention from "../retention.js";
 import type * as seed from "../seed.js";
 import type * as seen from "../seen.js";
 import type * as solutionDesigner from "../solutionDesigner.js";
 import type * as techversaProfile from "../techversaProfile.js";
 import type * as trendAgent from "../trendAgent.js";
 import type * as trendSources from "../trendSources.js";
+import type * as usageCheck from "../usageCheck.js";
 import type * as views from "../views.js";
 
 import type {
@@ -91,12 +93,14 @@ declare const fullApi: ApiFromModules<{
   prospectSources: typeof prospectSources;
   replies: typeof replies;
   resumes: typeof resumes;
+  retention: typeof retention;
   seed: typeof seed;
   seen: typeof seen;
   solutionDesigner: typeof solutionDesigner;
   techversaProfile: typeof techversaProfile;
   trendAgent: typeof trendAgent;
   trendSources: typeof trendSources;
+  usageCheck: typeof usageCheck;
   views: typeof views;
 }>;
 

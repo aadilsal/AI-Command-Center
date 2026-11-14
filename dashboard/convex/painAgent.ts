@@ -6,6 +6,7 @@ import { fetchAllSignals } from "./painSources";
 import { callLLMJson, LLM_PACING_MS, QuotaExhaustedError, sleep } from "./llm";
 import { PAIN_ANALYST_SYSTEM } from "./prompts";
 import { addToCounter, getCounter } from "./counters";
+import { isTombstoned } from "./retention";
 
 const AGENT_NAME = "Pain Agent";
 const MAX_LLM_PER_RUN = 15; // LLM analyses per run (keeps us inside Groq's free daily quota)
@@ -288,6 +289,7 @@ export const insertSignals = internalMutation({
         .withIndex("by_url", (q) => q.eq("url", s.url))
         .first();
       if (exists) continue;
+      if (await isTombstoned(ctx, "signalUrl", s.url)) continue; // deleted by clean-up, don't re-add
       await ctx.db.insert("painSignals", { ...s, fetchedAt: Date.now(), status: "pending" });
       inserted++;
     }
@@ -335,9 +337,16 @@ export const pendingCount = internalQuery({
 export const problemCatalog = internalQuery({
   args: { limit: v.number() },
   handler: async (ctx, { limit }) => {
-    const problems = (await ctx.db.query("problems").collect()).filter((p) => p.status !== "Parked");
-    problems.sort((a, b) => b.lastSeenAt - a.lastSeenAt);
-    return problems.slice(0, limit).map((p) => ({ _id: p._id as string, title: p.title, persona: p.persona }));
+    // Newest problems first, read through an index (never the whole table)
+    const recent = await ctx.db
+      .query("problems")
+      .withIndex("by_lastSeenAt")
+      .order("desc")
+      .take(limit * 2);
+    return recent
+      .filter((p) => p.status !== "Parked")
+      .slice(0, limit)
+      .map((p) => ({ _id: p._id as string, title: p.title, persona: p.persona }));
   },
 });
 

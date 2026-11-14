@@ -16,7 +16,7 @@ const JOB_PAGE = 20;
 const PROBLEM_PAGE = 40;
 const PROSPECT_PAGE = 60;
 const MIN_EVIDENCE_TO_DESIGN = 2;
-const STALE_MS = 60 * 1000; // a page visit refreshes the snapshot if it's older than this
+const STALE_MS = 60 * 60 * 1000; // a page visit refreshes the snapshot if it's older than this
 
 const EMPTY = {
   career: { open: 0, applied: 0, interview: 0, topJobs: [] as TopJob[], foundPerDay: [0, 0, 0, 0, 0, 0, 0] },

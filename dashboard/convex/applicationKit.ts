@@ -96,13 +96,27 @@ function findViolations(kit: Kit, cv: string, jobText: string): string[] {
 export const getJob = internalQuery({
   args: { id: v.optional(v.id("jobs")) },
   handler: async (ctx, { id }): Promise<Doc<"jobs"> | null> => {
-    if (id) return await ctx.db.get(id);
-    // No id: best open "Apply" job without a kit (handy for testing)
-    const jobs = (await ctx.db.query("jobs").collect()).filter(
-      (j) => j.source && j.status === "Saved" && j.recommendation === "Apply" && !j.kit
-    );
-    jobs.sort((a, b) => b.matchScore - a.matchScore);
-    return jobs[0] ?? null;
+    let job: Doc<"jobs"> | null = null;
+    if (id) {
+      job = await ctx.db.get(id);
+    } else {
+      // No id: best open "Apply" job without a kit (handy for testing)
+      const jobs = (
+        await ctx.db
+          .query("jobs")
+          .withIndex("by_status", (q) => q.eq("status", "Saved"))
+          .take(500)
+      ).filter((j) => j.source && j.recommendation === "Apply" && !j.kit);
+      jobs.sort((a, b) => b.matchScore - a.matchScore);
+      job = jobs[0] ?? null;
+    }
+    if (!job) return null;
+    // The description lives in jobDetails (older jobs may still have it on the row)
+    const detail = await ctx.db
+      .query("jobDetails")
+      .withIndex("by_job", (q) => q.eq("jobId", job._id))
+      .first();
+    return { ...job, description: detail?.description ?? job.description };
   },
 });
 

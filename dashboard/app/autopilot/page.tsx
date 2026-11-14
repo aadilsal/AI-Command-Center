@@ -71,7 +71,7 @@ export default function AutopilotPage() {
         <header className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className={`mb-1 font-mono text-xs tracking-[0.14em] ${state.paused ? "text-red-400" : "text-[#fb923c]"}`}>
-              {state.paused ? "AUTOPILOT PAUSED — NOTHING RUNS" : "AUTOPILOT ENGAGED · RUNS EVERY HOUR"}
+              {state.paused ? "AUTOPILOT PAUSED — NOTHING RUNS" : "AUTOPILOT ENGAGED · SCANS FOR WORK EVERY 3 HOURS"}
             </p>
             <h1 className="flex items-center gap-2 font-display text-[32px] font-semibold tracking-tight">
               <Zap className="h-7 w-7 text-[#fb923c]" /> Autopilot
@@ -340,7 +340,7 @@ export default function AutopilotPage() {
               <Loader2 className="h-5 w-5 animate-spin" />
             </div>
           ) : log.results.length === 0 ? (
-            <p className="px-5 py-6 text-sm text-hud-dim">No activity yet. Autopilot runs every hour, or press Run now.</p>
+            <p className="px-5 py-6 text-sm text-hud-dim">No activity yet. Autopilot scans every 3 hours, or press Run now.</p>
           ) : (
             <ul className="divide-y divide-hud-soft">
               {log.results.map((a) => (

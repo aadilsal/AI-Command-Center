@@ -10,6 +10,7 @@ import { PROFILE } from "./profile";
 import { fetchAllJobs, type NormalizedJob } from "./jobSources";
 import { callLLMJson, LLM_PACING_MS, sleep } from "./llm";
 import { jobKey } from "./keys";
+import { isTombstoned } from "./retention";
 
 const AGENT_NAME = "Career Agent";
 const MAX_JOBS_PER_RUN = 25;
@@ -246,6 +247,8 @@ export const filterNew = internalQuery({
         .withIndex("by_dedupeKey", (q) => q.eq("dedupeKey", key))
         .first();
       if (byKey) continue;
+      // Deleted by the nightly clean-up? Don't bring it back
+      if ((await isTombstoned(ctx, "jobUrl", url)) || (await isTombstoned(ctx, "jobKey", key))) continue;
       fresh.push(url);
     }
     return fresh;
@@ -262,8 +265,13 @@ export const backfillDescriptions = internalMutation({
         .query("jobs")
         .withIndex("by_url", (q) => q.eq("url", url))
         .first();
-      if (job && !job.description && description) {
-        await ctx.db.patch(job._id, { description });
+      if (!job || !description || job.status === "Archived" || job.status === "Rejected") continue;
+      const detail = await ctx.db
+        .query("jobDetails")
+        .withIndex("by_job", (q) => q.eq("jobId", job._id))
+        .first();
+      if (!detail && !job.description) {
+        await ctx.db.insert("jobDetails", { jobId: job._id, description });
         updated++;
       }
     }
@@ -297,11 +305,16 @@ export const saveJob = internalMutation({
       .withIndex("by_dedupeKey", (q) => q.eq("dedupeKey", args.dedupeKey))
       .first();
     if (byKey) return byKey._id;
+    if ((await isTombstoned(ctx, "jobUrl", args.url)) || (await isTombstoned(ctx, "jobKey", args.dedupeKey))) return null;
 
-    return await ctx.db.insert("jobs", {
-      ...args,
+    // The long description goes into its own table (keeps job lists cheap to read)
+    const { description, ...job } = args;
+    const id = await ctx.db.insert("jobs", {
+      ...job,
       status: "Saved",
       foundAt: Date.now(),
     });
+    if (description) await ctx.db.insert("jobDetails", { jobId: id, description });
+    return id;
   },
 });

@@ -6,15 +6,16 @@ const crons = cronJobs();
 // Every 30 min — un-stick any agent whose run died (e.g. computer slept mid-run)
 crons.interval("reset stuck agents", { minutes: 30 }, internal.agentStatus.resetStuck, {});
 
-// Every hour — Autopilot looks for work (kits, solution designs, follow-up drafts) and does it
-crons.interval("autopilot sweep", { hours: 1 }, internal.autopilot.sweep, {});
+// Every 3 hours — Autopilot looks for new work (kits, designs, emails to send) and does it.
+// (Queued emails keep going out every few minutes in between; this is only the "find work" scan.)
+crons.interval("autopilot sweep", { hours: 3 }, internal.autopilot.sweep, {});
 crons.interval("autopilot unstick", { minutes: 30 }, internal.autopilot.unstick, {});
 
 // Every 30 min — Reply Agent reads prospect replies in Gmail (does nothing until Gmail is connected)
 crons.interval("reply agent", { minutes: 30 }, internal.replies.check, {});
 
-// Every 5 min — rebuild the home screen summary in small pages (keeps queries under 1s)
-crons.interval("home snapshot", { minutes: 5 }, internal.home.refresh, {});
+// Every 2 hours (and when you open the dashboard, if older than 1 hour) — rebuild the home summary
+crons.interval("home snapshot", { hours: 2 }, internal.home.refresh, {});
 
 // Every 6 hours — collect pain signals and analyze the backlog
 crons.interval("pain agent", { hours: 6 }, internal.painAgent.run, {});
@@ -44,5 +45,8 @@ crons.weekly("trend scout", { dayOfWeek: "monday", hourUTC: 4, minuteUTC: 45 }, 
 
 // 05:00 UTC = 10:00 PKT — find + research agencies, draft emails
 crons.daily("prospect agent", { hourUTC: 5, minuteUTC: 0 }, internal.prospectAgent.run, {});
+
+// Nightly 03:15 PKT — delete/trim old data so the database (and every read) stays small
+crons.daily("retention", { hourUTC: 22, minuteUTC: 15 }, internal.retention.nightly, {});
 
 export default crons;

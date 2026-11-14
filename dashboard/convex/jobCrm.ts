@@ -51,6 +51,13 @@ export const sanitizeStored = internalMutation({
   handler: async (ctx) => {
     let cleaned = 0;
     let kitsCleared = 0;
+    for (const d of await ctx.db.query("jobDetails").collect()) {
+      const safe = stripApplyTraps(d.description);
+      if (safe !== d.description) {
+        await ctx.db.patch(d._id, { description: safe });
+        cleaned++;
+      }
+    }
     for (const job of await ctx.db.query("jobs").collect()) {
       const patch: Record<string, unknown> = {};
       if (job.description) {

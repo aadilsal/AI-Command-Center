@@ -116,7 +116,8 @@ export default defineSchema({
     ),
   })
     .index("by_score", ["score"])
-    .index("by_status", ["status"]),
+    .index("by_status", ["status"])
+    .index("by_lastSeenAt", ["lastSeenAt"]),
 
   // ---------------------------------------------------------------- Legacy (Lead Agent, retired)
 
@@ -422,6 +423,19 @@ export default defineSchema({
     .index("by_createdAt", ["createdAt"])
     .index("by_kind", ["kind", "createdAt"])
     .index("by_target", ["targetId", "kind"]),
+
+  // Long job descriptions live here, not on the job row, so job lists read ~5x less data
+  jobDetails: defineTable({
+    jobId: v.id("jobs"),
+    description: v.string(),
+  }).index("by_job", ["jobId"]),
+
+  // Remembers deleted jobs/posts so the agents never re-add them (see convex/retention.ts)
+  tombstones: defineTable({
+    kind: v.string(), // "jobUrl" | "jobKey" | "signalUrl"
+    value: v.string(),
+    at: v.number(),
+  }).index("by_kind_value", ["kind", "value"]),
 
   // "New since last visit" per detail page (see convex/seen.ts)
   pageVisits: defineTable({

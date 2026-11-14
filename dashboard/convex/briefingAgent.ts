@@ -44,7 +44,11 @@ export const gather = internalQuery({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
-    const jobs = (await ctx.db.query("jobs").collect()).filter((j) => j.source);
+    // Only the statuses the briefing looks at, via the index (not the archive)
+    const jobs = [
+      ...(await ctx.db.query("jobs").withIndex("by_status", (q) => q.eq("status", "Saved")).take(1000)),
+      ...(await ctx.db.query("jobs").withIndex("by_status", (q) => q.eq("status", "Applied")).take(1000)),
+    ].filter((j) => j.source);
     const problems = await ctx.db.query("problems").collect();
     const agents = await ctx.db.query("agents").collect();
 
