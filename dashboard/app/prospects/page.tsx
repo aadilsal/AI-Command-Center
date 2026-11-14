@@ -1,12 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { ArrowLeft, ChevronDown, ChevronUp, ExternalLink, Loader2, Mail, Play, RefreshCw, Search, Send } from "lucide-react";
-import { CopyButton, Pager, Select, timeAgo } from "../ui";
+import { ChevronDown, ChevronUp, ExternalLink, Loader2, Mail, Play, RefreshCw, Search, Send } from "lucide-react";
+import { CopyButton, FreshTabs, NewBadge, Pager, Select, timeAgo, useSince } from "../ui";
 
 const PAGE_SIZE = 12;
 const TABS = [
@@ -29,6 +28,8 @@ function gmailUrl(to: string, subject: string, body: string) {
 }
 
 export default function ProspectsPage() {
+  const { since, markAllSeen } = useSince("prospects");
+  const [freshWindow, setFreshWindow] = useState("auto");
   const [status, setStatus] = useState<string>("Ready");
   const [source, setSource] = useState("");
   const [country, setCountry] = useState("");
@@ -50,7 +51,14 @@ export default function ProspectsPage() {
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  const data = useQuery(api.views.prospectsPage, {
+  const data = useQuery(
+    api.views.prospectsPage,
+    since === null
+      ? "skip"
+      : {
+    // Follow-ups are about timing, not freshness, so that tab always shows everything due
+    window: dueOnly ? "all" : freshWindow,
+    since,
     status: dueOnly ? "Contacted" : status,
     source: source || undefined,
     country: country || undefined,
@@ -60,7 +68,8 @@ export default function ProspectsPage() {
     sort,
     page,
     pageSize: PAGE_SIZE,
-  });
+        }
+  );
 
   const runAgent = useMutation(api.prospectAgent.runNow);
   const markSent = useMutation(api.prospectCrm.markSent);
@@ -90,11 +99,7 @@ export default function ProspectsPage() {
 
   return (
     <main className="min-h-screen bg-zinc-950 p-6 text-zinc-100 md:p-10">
-      <Link href="/" className="inline-flex items-center gap-1 text-sm text-zinc-400 hover:text-zinc-100">
-        <ArrowLeft className="h-4 w-4" /> Dashboard
-      </Link>
-
-      <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-semibold"><Send className="h-6 w-6" /> Prospect Engine</h1>
           <p className="mt-1 text-sm text-zinc-400">
@@ -134,6 +139,11 @@ export default function ProspectsPage() {
           Follow-ups due ({f?.followUpsDue ?? 0})
         </button>
       </div>
+
+      {/* When it was found / researched */}
+      {!dueOnly && (
+        <FreshTabs window={data?.fresh.window} counts={data?.fresh.counts} onChange={reset(setFreshWindow)} onMarkAllSeen={markAllSeen} />
+      )}
 
       {/* Filters */}
       <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900 p-4">
@@ -178,10 +188,11 @@ export default function ProspectsPage() {
               const isBusy = busy === p._id;
               const d = p.draft;
               return (
-                <li key={p._id} className="py-4">
+                <li key={p._id} className={`-mx-3 rounded-lg px-3 py-4 ${p.isNew ? "bg-[#5eead4]/[0.04]" : ""}`}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                        {p.isNew && <NewBadge />}
                         {p.name}
                         {p.followUpDue && <span className="rounded bg-orange-500/15 px-1.5 py-0.5 text-xs font-normal text-orange-400">follow-up due</span>}
                       </p>

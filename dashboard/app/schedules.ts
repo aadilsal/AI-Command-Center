@@ -36,6 +36,7 @@ export const SCHEDULES: Record<string, { label: string; next: (lastRun?: number)
   "Coach Agent": { label: "Sun 9:30", next: () => nextWeeklyPKT(0, 9, 30) },
   "Trend Scout": { label: "Mon 9:45", next: () => nextWeeklyPKT(1, 9, 45) },
   "Prospect Agent": { label: "Daily 10:00", next: () => nextDailyPKT([10]) },
+  Autopilot: { label: "Hourly", next: (last) => (last ? last + HOUR : null) },
 };
 
 export function formatNext(ts: number | null) {

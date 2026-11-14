@@ -77,9 +77,39 @@ export const overview = query({
         .take(500)
     ).length;
 
+    // Autopilot (live, small index reads)
+    const pending = await ctx.db
+      .query("autopilotActions")
+      .withIndex("by_status", (q) => q.eq("status", "pending"))
+      .take(500);
+    const queued = await ctx.db
+      .query("autopilotActions")
+      .withIndex("by_status", (q) => q.eq("status", "queued"))
+      .take(500);
+    const dayStart = Math.floor((now + 5 * HOUR) / (24 * HOUR)) * 24 * HOUR - 5 * HOUR; // midnight PKT
+    const todays = await ctx.db
+      .query("autopilotActions")
+      .withIndex("by_createdAt", (q) => q.gte("createdAt", dayStart))
+      .take(1000);
+    const paused =
+      (
+        await ctx.db
+          .query("autopilotSettings")
+          .withIndex("by_key", (q) => q.eq("key", "_global"))
+          .first()
+      )?.paused ?? false;
+    const lastDone = todays.filter((a) => a.status === "done").sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0))[0];
+
     return {
       ...((snap?.data as Snapshot | undefined) ?? EMPTY),
       snapshotAt: snap?.updatedAt ?? null,
+      autopilot: {
+        paused,
+        pending: pending.length,
+        queued: queued.length,
+        doneToday: todays.filter((a) => a.status === "done").length,
+        lastDone: lastDone ? lastDone.title : null,
+      },
       workers,
       runs24h,
       agentErrors: workers.filter((w) => w.lastError).length,

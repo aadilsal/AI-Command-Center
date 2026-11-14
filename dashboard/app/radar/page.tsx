@@ -1,12 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useAction, useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
-import { ArrowLeft, ChevronDown, ChevronUp, ExternalLink, Lightbulb, Loader2, Play, RefreshCw, Search } from "lucide-react";
-import { EvidenceView, Pager, Select, SolutionView, scoreColor, timeAgo } from "../ui";
+import { ChevronDown, ChevronUp, ExternalLink, Lightbulb, Loader2, Play, RefreshCw, Search } from "lucide-react";
+import { EvidenceView, FreshTabs, NewBadge, Pager, Select, SolutionView, scoreColor, timeAgo, useSince } from "../ui";
 
 const PAGE_SIZE = 10;
 const STATUSES = ["New", "Exploring", "Building", "Launched", "Parked"] as const;
@@ -15,14 +14,11 @@ type ProblemStatus = (typeof STATUSES)[number];
 export default function RadarPage() {
   const [tab, setTab] = useState<"problems" | "signals">("problems");
   const runAgent = useMutation(api.painAgent.runNow);
+  const { since, markAllSeen } = useSince("radar");
 
   return (
     <main className="min-h-screen bg-zinc-950 p-6 text-zinc-100 md:p-10">
-      <Link href="/" className="inline-flex items-center gap-1 text-sm text-zinc-400 hover:text-zinc-100">
-        <ArrowLeft className="h-4 w-4" /> Dashboard
-      </Link>
-
-      <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">Opportunity Radar</h1>
           <p className="mt-1 text-sm text-zinc-400">Real business pain, grouped into problems and scored.</p>
@@ -49,14 +45,23 @@ export default function RadarPage() {
         ))}
       </div>
 
-      {tab === "problems" ? <ProblemsView /> : <SignalsView />}
+      {since === null ? (
+        <div className="flex justify-center py-10 text-zinc-500">
+          <Loader2 className="h-5 w-5 animate-spin" />
+        </div>
+      ) : tab === "problems" ? (
+        <ProblemsView since={since} markAllSeen={markAllSeen} />
+      ) : (
+        <SignalsView since={since} />
+      )}
     </main>
   );
 }
 
 // ---------------------------------------------------------------- Problems
 
-function ProblemsView() {
+function ProblemsView({ since, markAllSeen }: { since: number; markAllSeen: () => void }) {
+  const [freshWindow, setFreshWindow] = useState("auto");
   const [status, setStatus] = useState("all");
   const [source, setSource] = useState("");
   const [minEvidence, setMinEvidence] = useState("1");
@@ -80,6 +85,8 @@ function ProblemsView() {
   }, [searchInput]);
 
   const data = useQuery(api.views.problemsPage, {
+    window: freshWindow,
+    since,
     status,
     source: source || undefined,
     minEvidence: Number(minEvidence) > 1 ? Number(minEvidence) : undefined,
@@ -148,6 +155,9 @@ function ProblemsView() {
         ))}
       </div>
 
+      {/* When it was found / got new evidence */}
+      <FreshTabs window={data?.fresh.window} counts={data?.fresh.counts} onChange={reset(setFreshWindow)} onMarkAllSeen={markAllSeen} />
+
       {/* Filters */}
       <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900 p-4">
         <label className="flex flex-1 items-center gap-2 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1">
@@ -203,7 +213,9 @@ function ProblemsView() {
             <Loader2 className="h-5 w-5 animate-spin" />
           </div>
         ) : data.items.length === 0 ? (
-          <p className="py-6 text-center text-sm text-zinc-500">No problems match these filters.</p>
+          <p className="py-6 text-center text-sm text-zinc-500">
+            {data.fresh.window === "new" ? "Nothing new since your last visit." : "No problems match these filters."}
+          </p>
         ) : (
           <ul className="divide-y divide-zinc-800">
             {data.items.map((p) => {
@@ -211,13 +223,21 @@ function ProblemsView() {
               const ready = p.signalCount >= 2;
               const isBusy = busy === p._id;
               return (
-                <li key={p._id} className="py-4">
+                <li
+                  key={p._id}
+                  className={`-mx-3 rounded-lg px-3 py-4 ${p.isNew || p.isUpdated ? "bg-[#5eead4]/[0.04]" : ""}`}
+                >
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium">{p.title}</p>
+                      <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                        {p.isNew && <NewBadge />}
+                        {p.isUpdated && <NewBadge label="NEW EVIDENCE" />}
+                        {p.title}
+                      </p>
                       <p className="mt-0.5 text-xs text-zinc-500">
                         {p.persona}
                         {p.industries.length ? ` · ${p.industries.join(", ")}` : ""} · first seen {timeAgo(p.firstSeenAt)}
+                        {p.lastSeenAt - p.firstSeenAt > 60 * 60 * 1000 ? ` · latest evidence ${timeAgo(p.lastSeenAt)}` : ""}
                       </p>
                       <p className="mt-1 text-xs text-zinc-400">{p.summary}</p>
                       <div className="mt-2 flex flex-wrap gap-2 text-xs">
@@ -312,7 +332,7 @@ function ProblemsView() {
 
 // ---------------------------------------------------------------- Signals (raw posts)
 
-function SignalsView() {
+function SignalsView({ since }: { since: number }) {
   const [status, setStatus] = useState<"pending" | "analyzed" | "noise">("analyzed");
   const { results, status: loadStatus, loadMore } = usePaginatedQuery(
     api.views.signalsPage,
@@ -355,7 +375,10 @@ function SignalsView() {
             {results.map((s) => (
               <li key={s._id} className="py-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">
-                  <p className="min-w-0 flex-1 text-sm">{s.title}</p>
+                  <p className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-sm">
+                    {s.fetchedAt > since && <NewBadge />}
+                    {s.title}
+                  </p>
                   <a
                     href={s.url}
                     target="_blank"

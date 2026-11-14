@@ -336,6 +336,50 @@ export default defineSchema({
     lastNoteAt: v.optional(v.number()),
   }).index("by_name", ["name"]),
 
+  // Autopilot (see convex/autopilot.ts): your settings per action + the global Pause switch
+  autopilotSettings: defineTable({
+    key: v.string(), // a policy key, or "_global"
+    mode: v.optional(v.union(v.literal("off"), v.literal("draft"), v.literal("auto"))),
+    dailyCap: v.optional(v.number()),
+    minScore: v.optional(v.number()),
+    paused: v.optional(v.boolean()),
+  }).index("by_key", ["key"]),
+
+  // Every automatic step: waiting for you, queued, done, failed… (the approval queue + activity log)
+  autopilotActions: defineTable({
+    kind: v.string(),
+    agent: v.string(),
+    targetId: v.string(),
+    title: v.string(),
+    detail: v.optional(v.string()),
+    href: v.optional(v.string()),
+    status: v.union(
+      v.literal("pending"), // waiting for your approval
+      v.literal("queued"),
+      v.literal("running"),
+      v.literal("done"),
+      v.literal("failed"),
+      v.literal("rejected")
+    ),
+    createdAt: v.number(),
+    decidedAt: v.optional(v.number()),
+    decidedBy: v.optional(v.string()), // "you" | "autopilot"
+    startedAt: v.optional(v.number()),
+    finishedAt: v.optional(v.number()),
+    result: v.optional(v.string()),
+  })
+    .index("by_status", ["status", "createdAt"])
+    .index("by_createdAt", ["createdAt"])
+    .index("by_kind", ["kind", "createdAt"])
+    .index("by_target", ["targetId", "kind"]),
+
+  // "New since last visit" per detail page (see convex/seen.ts)
+  pageVisits: defineTable({
+    page: v.string(),
+    seenAt: v.number(),
+    previous: v.number(),
+  }).index("by_page", ["page"]),
+
   // Home screen summary, rebuilt in the background (see convex/home.ts)
   homeSnapshot: defineTable({
     data: v.any(),

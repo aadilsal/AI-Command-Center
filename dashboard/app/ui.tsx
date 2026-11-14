@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { Check, ChevronLeft, ChevronRight, Copy, ExternalLink, Quote } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { useMutation } from "convex/react";
+import { Check, CheckCheck, ChevronLeft, ChevronRight, Copy, ExternalLink, Quote } from "lucide-react";
+import { api } from "../convex/_generated/api";
 import type { Doc } from "../convex/_generated/dataModel";
 
 export function timeAgo(ts?: number) {
@@ -255,5 +257,100 @@ export function SolutionView({ problem }: { problem: Doc<"problems"> }) {
       </div>
       <ListBlock title="Risks" items={s.risks} />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- Freshness: new vs old
+
+// Returns the time of your previous visit to this page (null while loading).
+// Anything found after it is "NEW".
+export function useSince(page: string) {
+  const visit = useMutation(api.seen.visit);
+  const markAll = useMutation(api.seen.markAllSeen);
+  const [since, setSince] = useState<number | null>(null);
+  const started = useRef(false);
+
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    visit({ page })
+      .then((prev: number) => setSince(prev))
+      .catch(() => setSince(Date.now() - 24 * 60 * 60 * 1000));
+  }, [page, visit]);
+
+  async function markAllSeen() {
+    const now: number = await markAll({ page });
+    setSince(now);
+  }
+  return { since, markAllSeen };
+}
+
+const FRESH_TABS = [
+  ["new", "New since last visit"],
+  ["today", "Last 24 h"],
+  ["week", "This week"],
+  ["month", "This month"],
+  ["older", "Older"],
+  ["all", "All"],
+] as const;
+
+type FreshCounts = { new: number; today: number; week: number; month: number; older: number; all: number };
+
+export function FreshTabs({
+  window,
+  counts,
+  onChange,
+  onMarkAllSeen,
+}: {
+  window?: string;
+  counts?: FreshCounts;
+  onChange: (w: string) => void;
+  onMarkAllSeen?: () => void;
+}) {
+  return (
+    <div className="mt-4 flex flex-wrap items-center gap-1.5" role="group" aria-label="When it was found">
+      {FRESH_TABS.map(([key, label]) => {
+        const active = window === key;
+        const n = counts?.[key] ?? 0;
+        const isNewTab = key === "new";
+        return (
+          <button
+            key={key}
+            type="button"
+            onClick={() => onChange(key)}
+            aria-pressed={active}
+            className={`flex min-h-9 items-center gap-1.5 rounded-full px-3 text-xs transition-colors ${
+              active
+                ? isNewTab
+                  ? "bg-[#5eead4] font-semibold text-zinc-950"
+                  : "bg-zinc-100 font-medium text-zinc-900"
+                : isNewTab && n > 0
+                  ? "border border-[#5eead4]/50 text-[#5eead4] hover:bg-[#5eead4]/10"
+                  : "border border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+            }`}
+          >
+            {label}
+            <span className="font-mono">{n}</span>
+          </button>
+        );
+      })}
+      {onMarkAllSeen && (counts?.new ?? 0) > 0 && (
+        <button
+          type="button"
+          onClick={onMarkAllSeen}
+          className="ml-auto flex min-h-9 items-center gap-1 rounded-full px-3 text-xs text-zinc-400 hover:text-zinc-100"
+        >
+          <CheckCheck className="h-3.5 w-3.5" /> Mark all as seen
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function NewBadge({ label = "NEW" }: { label?: string }) {
+  return (
+    <span className="rounded bg-[#5eead4]/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold tracking-wider text-[#5eead4]">
+      {label}
+    </span>
   );
 }

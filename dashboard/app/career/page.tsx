@@ -1,20 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { ArrowLeft, ChevronDown, ChevronUp, ExternalLink, FileText, Loader2, Play, RefreshCw, Search } from "lucide-react";
-import { KitView, Pager, Select, recBadge, timeAgo } from "../ui";
+import { ChevronDown, ChevronUp, ExternalLink, FileText, Loader2, Play, RefreshCw, Search } from "lucide-react";
+import { FreshTabs, KitView, NewBadge, Pager, Select, recBadge, timeAgo, useSince } from "../ui";
 
 const PAGE_SIZE = 15;
 const STATUSES = ["Saved", "Applied", "Interview", "Rejected", "Offer"] as const;
 type JobStatus = (typeof STATUSES)[number];
 
 export default function CareerPage() {
-  const [status, setStatus] = useState("active");
-  const [recommendation, setRecommendation] = useState("");
+  const { since, markAllSeen } = useSince("career");
+  const [freshWindow, setFreshWindow] = useState("auto");
+  const [status, setStatus] = useState("Saved"); // "To apply" — jobs you haven't acted on
+  const [recommendation, setRecommendation] = useState("notSkip");
   const [source, setSource] = useState("");
   const [minScore, setMinScore] = useState("0");
   const [sort, setSort] = useState<"score" | "newest">("score");
@@ -34,7 +35,13 @@ export default function CareerPage() {
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  const data = useQuery(api.views.jobsPage, {
+  const data = useQuery(
+    api.views.jobsPage,
+    since === null
+      ? "skip"
+      : {
+    window: freshWindow,
+    since,
     status,
     recommendation: recommendation || undefined,
     source: source || undefined,
@@ -43,7 +50,8 @@ export default function CareerPage() {
     sort,
     page,
     pageSize: PAGE_SIZE,
-  });
+        }
+  );
 
   const setJobStatus = useMutation(api.jobCrm.setStatus);
   const markApplied = useMutation(api.jobCrm.markApplied);
@@ -72,11 +80,7 @@ export default function CareerPage() {
 
   return (
     <main className="min-h-screen bg-zinc-950 p-6 text-zinc-100 md:p-10">
-      <Link href="/" className="inline-flex items-center gap-1 text-sm text-zinc-400 hover:text-zinc-100">
-        <ArrowLeft className="h-4 w-4" /> Dashboard
-      </Link>
-
-      <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">Career Agent</h1>
           <p className="mt-1 text-sm text-zinc-400">Every job the agent found, scored against your profile.</p>
@@ -108,8 +112,16 @@ export default function CareerPage() {
         </div>
       )}
 
+      {/* When it was found */}
+      <FreshTabs
+        window={data?.fresh.window}
+        counts={data?.fresh.counts}
+        onChange={resetPage(setFreshWindow)}
+        onMarkAllSeen={markAllSeen}
+      />
+
       {/* Filters */}
-      <div className="mt-6 flex flex-wrap items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+      <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900 p-4">
         <label className="flex flex-1 items-center gap-2 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1">
           <Search className="h-4 w-4 text-zinc-500" />
           <input
@@ -124,8 +136,9 @@ export default function CareerPage() {
           value={status}
           onChange={resetPage(setStatus)}
           options={[
+            { value: "Saved", label: `To apply (${f?.statusCounts.Saved ?? 0})` },
             { value: "active", label: "All active" },
-            ...STATUSES.map((s) => ({ value: s, label: `${s} (${f?.statusCounts[s] ?? 0})` })),
+            ...STATUSES.filter((s) => s !== "Saved").map((s) => ({ value: s, label: `${s} (${f?.statusCounts[s] ?? 0})` })),
             { value: "Archived", label: `Archived (${f?.statusCounts.Archived ?? 0})` },
             { value: "all", label: "Everything" },
           ]}
@@ -135,6 +148,7 @@ export default function CareerPage() {
           value={recommendation}
           onChange={resetPage(setRecommendation)}
           options={[
+            { value: "notSkip", label: "Hide Skip" },
             { value: "", label: "Any" },
             { value: "Apply", label: "Apply" },
             { value: "Maybe", label: "Maybe" },
@@ -173,17 +187,22 @@ export default function CareerPage() {
             <Loader2 className="h-5 w-5 animate-spin" />
           </div>
         ) : data.items.length === 0 ? (
-          <p className="py-6 text-center text-sm text-zinc-500">No jobs match these filters.</p>
+          <p className="py-6 text-center text-sm text-zinc-500">
+            {data.fresh.window === "new" ? "Nothing new since your last visit." : "No jobs match these filters."}
+          </p>
         ) : (
           <ul className="divide-y divide-zinc-800">
             {data.items.map((j) => {
               const id = j._id as Id<"jobs">;
               const isOpen = open === j._id;
               return (
-                <li key={j._id} className="py-4">
+                <li key={j._id} className={`-mx-3 rounded-lg px-3 py-4 ${j.isNew ? "bg-[#5eead4]/[0.04]" : ""}`}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium">{j.title}</p>
+                      <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                        {j.isNew && <NewBadge />}
+                        {j.title}
+                      </p>
                       <p className="mt-0.5 text-xs text-zinc-500">
                         {j.company} · {j.location ?? "—"} · {j.source} · found {timeAgo(j.foundAt)}
                       </p>

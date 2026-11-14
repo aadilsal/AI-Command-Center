@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Settings2,
   TrendingUp,
+  Zap,
 } from "lucide-react";
 import { SCHEDULES, formatNext, shortAgo } from "./schedules";
 
@@ -27,6 +28,7 @@ const C = {
   trends: "#38bdf8",
   coach: "#f472b6",
   designer: "#93a1ad",
+  autopilot: "#fb923c",
 };
 
 const runColor: Record<string, string> = {
@@ -93,6 +95,7 @@ function AgentTile({
   worker,
   when,
   run,
+  wide,
   children,
 }: {
   index: string;
@@ -102,11 +105,12 @@ function AgentTile({
   worker?: Overview["workers"][number];
   when: string;
   run?: { running: boolean; onRun: () => Promise<unknown> };
+  wide?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <div
-      className="group flex flex-col gap-3 rounded-xl border border-hud-line bg-hud-panel p-[18px] transition-colors hover:border-[color:var(--tile)]"
+      className={`group flex flex-col gap-3 rounded-xl ${wide ? "sm:col-span-2 xl:col-span-3" : ""} border border-hud-line bg-hud-panel p-[18px] transition-colors hover:border-[color:var(--tile)]`}
       style={{ borderTop: `2px solid ${color}`, ["--tile" as string]: color }}
     >
       <div className="flex items-center justify-between gap-2">
@@ -151,6 +155,7 @@ export default function Home() {
   const runTrends = useMutation(api.trendAgent.runNow);
   const runCoach = useMutation(api.coachAgent.runNow);
   const runBriefing = useMutation(api.briefingAgent.runNow);
+  const runAutopilot = useMutation(api.autopilot.runNow);
 
   const requestRefresh = useMutation(api.home.requestRefresh);
 
@@ -315,6 +320,27 @@ export default function Home() {
               // Agents
             </h2>
             <div className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-3">
+              <AgentTile
+                index="00"
+                name="Autopilot"
+                wide
+                color={C.autopilot}
+                href="/autopilot"
+                worker={worker("Autopilot")}
+                when={data.autopilot.paused ? "PAUSED" : when("Autopilot")}
+                run={{ running: running("Autopilot"), onRun: () => runAutopilot() }}
+              >
+                <Metric value={data.autopilot.doneToday} unit="done for you today" />
+                <span className="flex flex-wrap gap-1.5">
+                  <Chip color={C.autopilot}>{data.autopilot.pending} waiting for you</Chip>
+                  <Chip>{data.autopilot.queued} queued</Chip>
+                </span>
+                <span className="flex gap-1.5 text-[13px] text-hud-muted">
+                  <Zap className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: C.autopilot }} />
+                  <span className="truncate">{data.autopilot.lastDone ?? "Nothing done yet today"}</span>
+                </span>
+              </AgentTile>
+
               <AgentTile
                 index="01"
                 name="Career"

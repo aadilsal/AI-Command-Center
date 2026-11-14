@@ -10,6 +10,7 @@
 
 import type * as agentStatus from "../agentStatus.js";
 import type * as applicationKit from "../applicationKit.js";
+import type * as autopilot from "../autopilot.js";
 import type * as briefingAgent from "../briefingAgent.js";
 import type * as careerAgent from "../careerAgent.js";
 import type * as cleanup from "../cleanup.js";
@@ -39,6 +40,7 @@ import type * as prospectCrm from "../prospectCrm.js";
 import type * as prospectSources from "../prospectSources.js";
 import type * as resumes from "../resumes.js";
 import type * as seed from "../seed.js";
+import type * as seen from "../seen.js";
 import type * as solutionDesigner from "../solutionDesigner.js";
 import type * as techversaProfile from "../techversaProfile.js";
 import type * as trendAgent from "../trendAgent.js";
@@ -54,6 +56,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   agentStatus: typeof agentStatus;
   applicationKit: typeof applicationKit;
+  autopilot: typeof autopilot;
   briefingAgent: typeof briefingAgent;
   careerAgent: typeof careerAgent;
   cleanup: typeof cleanup;
@@ -83,6 +86,7 @@ declare const fullApi: ApiFromModules<{
   prospectSources: typeof prospectSources;
   resumes: typeof resumes;
   seed: typeof seed;
+  seen: typeof seen;
   solutionDesigner: typeof solutionDesigner;
   techversaProfile: typeof techversaProfile;
   trendAgent: typeof trendAgent;

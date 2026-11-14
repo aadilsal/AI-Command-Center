@@ -4,6 +4,46 @@ import { paginationOptsValidator } from "convex/server";
 
 const ACTED = ["Applied", "Interview", "Offer", "Rejected"];
 
+// ---------------------------------------------------------------- Freshness ("new vs old")
+// Every list page can be sliced by when things were found:
+//   new   = since your last visit (the page sends `since`)
+//   today = last 24 h · week = last 7 days · month = last 30 days · older = before that
+// "auto" picks New if there's anything new, otherwise This week, otherwise All.
+
+const DAY = 24 * 60 * 60 * 1000;
+const WINDOWS = ["auto", "new", "today", "week", "month", "older", "all"] as const;
+type FreshWindow = (typeof WINDOWS)[number];
+const freshArgs = { window: v.optional(v.string()), since: v.optional(v.number()) };
+
+function sliceByFreshness<T>(rows: T[], ts: (r: T) => number, windowArg: string | undefined, since: number | undefined) {
+  const now = Date.now();
+  const s = since ?? now - DAY;
+  const counts = { new: 0, today: 0, week: 0, month: 0, older: 0, all: rows.length };
+  for (const r of rows) {
+    const t = ts(r);
+    if (t > s) counts.new++;
+    if (t > now - DAY) counts.today++;
+    if (t > now - 7 * DAY) counts.week++;
+    if (t > now - 30 * DAY) counts.month++;
+    else counts.older++;
+  }
+  let window = (WINDOWS as readonly string[]).includes(windowArg ?? "") ? (windowArg as FreshWindow) : "auto";
+  if (window === "auto") window = counts.new > 0 ? "new" : counts.week > 0 ? "week" : "all";
+  const keep = (t: number) =>
+    window === "new"
+      ? t > s
+      : window === "today"
+        ? t > now - DAY
+        : window === "week"
+          ? t > now - 7 * DAY
+          : window === "month"
+            ? t > now - 30 * DAY
+            : window === "older"
+              ? t <= now - 30 * DAY
+              : true;
+  return { rows: rows.filter((r) => keep(ts(r))), counts, window, since: s };
+}
+
 // ---------------------------------------------------------------- Career: jobs
 
 export const jobsPage = query({
@@ -16,6 +56,7 @@ export const jobsPage = query({
     sort: v.optional(v.union(v.literal("score"), v.literal("newest"))),
     page: v.number(),
     pageSize: v.number(),
+    ...freshArgs,
   },
   handler: async (ctx, a) => {
     const all = (await ctx.db.query("jobs").collect()).filter((j) => j.source);
@@ -38,31 +79,33 @@ export const jobsPage = query({
     let rows = all.filter((j) => {
       if (status === "active" && j.status === "Archived") return false;
       if (status !== "active" && status !== "all" && j.status !== status) return false;
-      if (a.recommendation && j.recommendation !== a.recommendation) return false;
+      if (a.recommendation === "notSkip" && j.recommendation === "Skip") return false;
+      if (a.recommendation && a.recommendation !== "notSkip" && j.recommendation !== a.recommendation) return false;
       if (a.source && j.source !== a.source) return false;
       if (a.minScore && j.matchScore < a.minScore) return false;
       if (q && !`${j.title} ${j.company} ${j.location ?? ""}`.toLowerCase().includes(q)) return false;
       return true;
     });
 
-    rows.sort((x, y) =>
-      a.sort === "newest"
-        ? (y.foundAt ?? y._creationTime) - (x.foundAt ?? x._creationTime)
-        : y.matchScore - x.matchScore
-    );
+    const foundAt = (j: (typeof all)[number]) => j.foundAt ?? j._creationTime;
+    const fresh = sliceByFreshness(rows, foundAt, a.window, a.since);
+    rows = fresh.rows;
+
+    rows.sort((x, y) => (a.sort === "newest" ? foundAt(y) - foundAt(x) : y.matchScore - x.matchScore));
 
     const total = rows.length;
     const pageCount = Math.max(1, Math.ceil(total / a.pageSize));
     const page = Math.min(Math.max(1, a.page), pageCount);
     const items = rows
       .slice((page - 1) * a.pageSize, page * a.pageSize)
-      .map(({ description: _d, ...rest }) => rest); // never send descriptions to the browser
+      .map(({ description: _d, ...rest }) => ({ ...rest, isNew: foundAt(rest as (typeof all)[number]) > fresh.since })); // never send descriptions
 
     return {
       items,
       total,
       page,
       pageCount,
+      fresh: { counts: fresh.counts, window: fresh.window },
       facets: {
         statusCounts,
         sources: Object.keys(sourceCounts).sort(),
@@ -88,6 +131,7 @@ export const problemsPage = query({
     sort: v.optional(v.union(v.literal("score"), v.literal("evidence"), v.literal("newest"))),
     page: v.number(),
     pageSize: v.number(),
+    ...freshArgs,
   },
   handler: async (ctx, a) => {
     const all = await ctx.db.query("problems").collect();
@@ -114,11 +158,15 @@ export const problemsPage = query({
       return true;
     });
 
+    // A problem counts as fresh when it was found OR got new evidence recently
+    const fresh = sliceByFreshness(rows, (p) => p.lastSeenAt, a.window, a.since);
+    rows = fresh.rows;
+
     rows.sort((x, y) =>
       a.sort === "evidence"
         ? y.signalCount - x.signalCount || y.score - x.score
         : a.sort === "newest"
-          ? y.firstSeenAt - x.firstSeenAt
+          ? y.lastSeenAt - x.lastSeenAt
           : y.score - x.score
     );
 
@@ -127,10 +175,15 @@ export const problemsPage = query({
     const page = Math.min(Math.max(1, a.page), pageCount);
 
     return {
-      items: rows.slice((page - 1) * a.pageSize, page * a.pageSize),
+      items: rows.slice((page - 1) * a.pageSize, page * a.pageSize).map((p) => ({
+        ...p,
+        isNew: p.firstSeenAt > fresh.since,
+        isUpdated: p.firstSeenAt <= fresh.since && p.lastSeenAt > fresh.since,
+      })),
       total,
       page,
       pageCount,
+      fresh: { counts: fresh.counts, window: fresh.window },
       facets: {
         statusCounts,
         sources: [...sourceSet].sort(),
@@ -306,6 +359,7 @@ export const prospectsPage = query({
     sort: v.optional(v.union(v.literal("fit"), v.literal("newest"), v.literal("lastContact"))),
     page: v.number(),
     pageSize: v.number(),
+    ...freshArgs,
   },
   handler: async (ctx, a) => {
     const now = Date.now();
@@ -329,9 +383,14 @@ export const prospectsPage = query({
       return true;
     });
 
+    // Fresh = researched (draft written) or found recently
+    const freshAt = (p: (typeof all)[number]) => p.researchedAt ?? p.foundAt;
+    const fresh = sliceByFreshness(rows, freshAt, a.window, a.since);
+    rows = fresh.rows;
+
     rows.sort((x, y) =>
       a.sort === "newest"
-        ? y.foundAt - x.foundAt
+        ? freshAt(y) - freshAt(x)
         : a.sort === "lastContact"
           ? (y.lastContactAt ?? 0) - (x.lastContactAt ?? 0)
           : (y.fitScore ?? 0) - (x.fitScore ?? 0)
@@ -342,10 +401,13 @@ export const prospectsPage = query({
     const page = Math.min(Math.max(1, a.page), pageCount);
 
     return {
-      items: rows.slice((page - 1) * a.pageSize, page * a.pageSize).map((p) => ({ ...p, followUpDue: followUpDue(p, now) })),
+      items: rows
+        .slice((page - 1) * a.pageSize, page * a.pageSize)
+        .map((p) => ({ ...p, followUpDue: followUpDue(p, now), isNew: freshAt(p) > fresh.since })),
       total,
       page,
       pageCount,
+      fresh: { counts: fresh.counts, window: fresh.window },
       facets: {
         counts,
         sources: [...sources].sort(),

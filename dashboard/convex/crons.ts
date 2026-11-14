@@ -6,6 +6,10 @@ const crons = cronJobs();
 // Every 30 min — un-stick any agent whose run died (e.g. computer slept mid-run)
 crons.interval("reset stuck agents", { minutes: 30 }, internal.agentStatus.resetStuck, {});
 
+// Every hour — Autopilot looks for work (kits, solution designs, follow-up drafts) and does it
+crons.interval("autopilot sweep", { hours: 1 }, internal.autopilot.sweep, {});
+crons.interval("autopilot unstick", { minutes: 30 }, internal.autopilot.unstick, {});
+
 // Every 5 min — rebuild the home screen summary in small pages (keeps queries under 1s)
 crons.interval("home snapshot", { minutes: 5 }, internal.home.refresh, {});
 
