@@ -95,6 +95,15 @@ export const overview = query({
         .take(200)
     ).length;
     const lastReply = await ctx.db.query("inboundEmails").withIndex("by_receivedAt").order("desc").first();
+    const cvProjectsCount = (await ctx.db.query("cvProjects").take(200)).filter((p) => p.include !== "never").length;
+    const cvRecent = await ctx.db
+      .query("cvFiles")
+      .withIndex("by_createdAt", (q) => q.gte("createdAt", now - 7 * 24 * HOUR))
+      .take(200);
+    const cvAgent = await ctx.db
+      .query("agents")
+      .withIndex("by_name", (q) => q.eq("name", "CV Builder"))
+      .first();
     const gmailRow = await ctx.db
       .query("integrations")
       .withIndex("by_name", (q) => q.eq("name", "gmail"))
@@ -116,6 +125,12 @@ export const overview = query({
         last: lastReply ? { from: lastReply.fromName || lastReply.fromEmail, category: lastReply.category, at: lastReply.receivedAt } : null,
       },
       gmail: { status: gmailRow?.status ?? "missing", email: gmailRow?.email ?? null },
+      cv: {
+        projects: cvProjectsCount,
+        builtThisWeek: cvRecent.filter((f) => f.kind === "cv").length,
+        sentThisWeek: cvRecent.filter((f) => f.kind === "cv" && f.sentTo).length,
+        lastSync: cvAgent?.lastRun ?? null,
+      },
       workers,
       runs24h,
       agentErrors: workers.filter((w) => w.lastError).length,

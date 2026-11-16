@@ -2,6 +2,7 @@
 // One-time Gmail sign-in for the Command Center.
 //
 //   cd ~/ai-command-center/dashboard && node scripts/gmail-login.mjs
+//   node scripts/gmail-login.mjs --alerts   → connect a second inbox READ-ONLY (job alert emails)
 //
 // 1. Reads your OAuth client from ~/.config/command-center/google-oauth.json
 // 2. Prints a Google sign-in link → you approve in the browser
@@ -23,7 +24,11 @@ import { createInterface } from "node:readline";
 const CRED_PATH = process.env.GOOGLE_OAUTH_JSON ?? join(homedir(), ".config", "command-center", "google-oauth.json");
 const PORT = 53682;
 const REDIRECT = `http://localhost:${PORT}`;
-const SCOPES = ["https://www.googleapis.com/auth/gmail.send", "https://www.googleapis.com/auth/gmail.readonly"];
+const ALERTS = process.argv.includes("--alerts");
+// The alerts inbox only needs reading; the main inbox sends and reads
+const SCOPES = ALERTS
+  ? ["https://www.googleapis.com/auth/gmail.readonly"]
+  : ["https://www.googleapis.com/auth/gmail.send", "https://www.googleapis.com/auth/gmail.readonly"];
 
 function fail(msg) {
   console.error(`\n✖ ${msg}\n`);
@@ -98,12 +103,17 @@ async function finish(code, returnedState) {
   console.log(`Connected as ${profile.emailAddress}. Saving to Convex…`);
   convexEnvSet("GOOGLE_CLIENT_ID", creds.client_id);
   convexEnvSet("GOOGLE_CLIENT_SECRET", creds.client_secret);
-  convexEnvSet("GOOGLE_REFRESH_TOKEN", tokens.refresh_token);
-  convexEnvSet("GMAIL_ADDRESS", profile.emailAddress);
-
-  const check = spawnSync("npx", ["convex", "run", "gmail:check"], { encoding: "utf8" });
-  console.log(check.stdout || check.stderr);
-  console.log("✔ Gmail is connected. Open /autopilot on the dashboard.\n");
+  if (ALERTS) {
+    convexEnvSet("GOOGLE_REFRESH_TOKEN_ALERTS", tokens.refresh_token);
+    convexEnvSet("ALERTS_GMAIL_ADDRESS", profile.emailAddress);
+    console.log(`✔ ${profile.emailAddress} connected read-only for job alerts. Test: npx convex run jobAlerts:preview\n`);
+  } else {
+    convexEnvSet("GOOGLE_REFRESH_TOKEN", tokens.refresh_token);
+    convexEnvSet("GMAIL_ADDRESS", profile.emailAddress);
+    const check = spawnSync("npx", ["convex", "run", "gmail:check"], { encoding: "utf8" });
+    console.log(check.stdout || check.stderr);
+    console.log("✔ Gmail is connected. Open /autopilot on the dashboard.\n");
+  }
   server.close();
   rl.close();
   process.exit(0);
@@ -144,12 +154,12 @@ rl.on("line", (line) => {
 console.log(`
 Gmail sign-in for the Command Center
 ────────────────────────────────────
-1. Open this link in Chrome and sign in with the Gmail you want to send from:
+1. Open this link in Chrome and sign in with ${ALERTS ? "the Gmail where your JOB ALERTS arrive (read-only)" : "the Gmail you want to send from"}:
 
 ${authUrl}
 
 2. If Google says the app isn't verified: Advanced → "Go to Command Center (unsafe)" → Continue.
-3. Tick both permissions (send + read) and press Continue.
+3. Tick ${ALERTS ? "the read permission" : "both permissions (send + read)"} and press Continue.
 
 If the last page shows "This site can't be reached", copy the full address from
 the browser bar and paste it here, then press Enter.

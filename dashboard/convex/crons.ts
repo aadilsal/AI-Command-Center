@@ -49,4 +49,7 @@ crons.daily("prospect agent", { hourUTC: 5, minuteUTC: 0 }, internal.prospectAge
 // Nightly 03:15 PKT — delete/trim old data so the database (and every read) stays small
 crons.daily("retention", { hourUTC: 22, minuteUTC: 15 }, internal.retention.nightly, {});
 
+// Weekly, Sunday 21:00 PKT — read your GitHub repos and update CV projects
+crons.weekly("cv github sync", { dayOfWeek: "sunday", hourUTC: 16, minuteUTC: 0 }, internal.cvProjects.syncGithub, {});
+
 export default crons;

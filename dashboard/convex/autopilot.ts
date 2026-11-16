@@ -50,11 +50,10 @@ export const POLICIES = {
   sendIntro: { label: "Send first emails to ready prospects", agent: "Prospects", defaultMode: "draft" as Mode, dailyCap: 15, minScore: 60, available: true, needsGmail: true },
   sendFollowUp: { label: "Send written follow-ups", agent: "Prospects", defaultMode: "draft" as Mode, dailyCap: 20, minScore: 0, available: true, needsGmail: true },
   replyTriage: { label: "Answer replies (pricing questions always ask you)", agent: "Replies", defaultMode: "draft" as Mode, dailyCap: 30, minScore: 0, available: true, needsGmail: true },
-  // --- Coming next ---
-  applyByEmail: { label: "Apply to jobs that accept email applications", agent: "Career", defaultMode: "draft" as Mode, dailyCap: 5, minScore: 85, available: false, needsGmail: true },
+  applyByEmail: { label: "Apply by email (tailored CV + cover letter)", agent: "Career", defaultMode: "draft" as Mode, dailyCap: 5, minScore: 85, available: true, needsGmail: true },
 } as const;
 
-const SEND_KINDS = new Set(["sendIntro", "sendFollowUp", "replyTriage"]);
+const SEND_KINDS = new Set(["sendIntro", "sendFollowUp", "replyTriage", "applyByEmail"]);
 // Cold emails wait for business hours; answers to people who wrote to you go any time
 const COLD_KINDS = new Set(["sendIntro", "sendFollowUp"]);
 
@@ -418,6 +417,33 @@ export const sweep = internalAction({
       }
     }
 
+    // Career: jobs that take applications by email
+    const apply = mode("applyByEmail");
+    if (apply && apply.mode !== "off") {
+      let cursor: string | null = null;
+      const found: { _id: string; title: string; company: string; matchScore: number; email: string; salaryQuestion: boolean }[] = [];
+      do {
+        const res: { items: typeof found; cursor: string; isDone: boolean } = await ctx.runQuery(internal.jobApply.candidates, {
+          minScore: apply.minScore,
+          cursor,
+        });
+        found.push(...res.items);
+        cursor = res.isDone ? null : res.cursor;
+      } while (cursor);
+      found.sort((x, y) => y.matchScore - x.matchScore);
+      for (const j of found.slice(0, 10)) {
+        const r: string = await ctx.runMutation(internal.autopilot.propose, {
+          kind: "applyByEmail",
+          targetId: j._id,
+          title: `Apply: ${j.title} @ ${j.company}`,
+          detail: `Match ${j.matchScore}% · to ${j.email}${j.salaryQuestion ? " · asks about salary" : ""}`,
+          href: "/career",
+          forceApproval: j.salaryQuestion, // salary/rate questions always wait for you
+        });
+        if (r !== "skipped") proposed.applyByEmail = (proposed.applyByEmail ?? 0) + 1;
+      }
+    }
+
     // Do the work in a separate run, so finding + doing never hit the 10-minute limit together
     await ctx.scheduler.runAfter(0, internal.autopilot.processQueue, {});
     return { proposed };
@@ -605,6 +631,9 @@ async function execute(ctx: any, a: Doc<"autopilotActions">): Promise<string> {
     case "sendFollowUp": {
       const id = a.targetId.split("#")[0] as Id<"prospects">;
       return await ctx.runAction(internal.outbox.sendProspectEmail, { id, expect: "followup" });
+    }
+    case "applyByEmail": {
+      return await ctx.runAction(internal.jobApply.applyByEmail, { jobId: a.targetId as Id<"jobs"> });
     }
     case "replyTriage": {
       return await ctx.runAction(internal.outbox.sendReply, { inboundId: a.targetId as Id<"inboundEmails"> });

@@ -38,6 +38,9 @@ export default defineSchema({
         generatedAt: v.number(),
       })
     ),
+    // Applied automatically by email (CV Builder + Gmail)
+    applyEmail: v.optional(v.string()),
+    appliedVia: v.optional(v.string()),
   })
     .index("by_status", ["status"])
     .index("by_url", ["url"])
@@ -423,6 +426,38 @@ export default defineSchema({
     .index("by_createdAt", ["createdAt"])
     .index("by_kind", ["kind", "createdAt"])
     .index("by_target", ["targetId", "kind"]),
+
+  // CV Builder: every project that can appear on your CV (from your CV + your GitHub repos)
+  cvProjects: defineTable({
+    key: v.string(),
+    name: v.string(),
+    context: v.optional(v.string()),
+    url: v.optional(v.string()),
+    stack: v.array(v.string()),
+    bullets: v.array(v.string()),
+    tags: v.array(v.string()),
+    source: v.union(v.literal("cv"), v.literal("github")),
+    repo: v.optional(v.string()),
+    repoPushedAt: v.optional(v.number()),
+    stars: v.optional(v.number()),
+    include: v.union(v.literal("auto"), v.literal("always"), v.literal("never")),
+    updatedAt: v.number(),
+  })
+    .index("by_key", ["key"])
+    .index("by_repo", ["repo"]),
+
+  // Generated PDFs (tailored CVs and cover letters), stored in Convex file storage
+  cvFiles: defineTable({
+    jobId: v.optional(v.id("jobs")),
+    kind: v.union(v.literal("cv"), v.literal("letter")),
+    storageId: v.id("_storage"),
+    filename: v.string(),
+    projectKeys: v.array(v.string()),
+    createdAt: v.number(),
+    sentTo: v.optional(v.string()),
+  })
+    .index("by_job", ["jobId"])
+    .index("by_createdAt", ["createdAt"]),
 
   // Long job descriptions live here, not on the job row, so job lists read ~5x less data
   jobDetails: defineTable({

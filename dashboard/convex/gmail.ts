@@ -13,19 +13,32 @@ const API = "https://gmail.googleapis.com/gmail/v1/users/me";
 
 export class GmailAuthError extends Error {}
 
-export function gmailConfigured(): boolean {
-  return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REFRESH_TOKEN);
+// "main" = the Gmail that sends (asb84390…); "alerts" = a second, read-only inbox where job alerts arrive
+export type GmailAccount = "main" | "alerts";
+
+function refreshToken(account: GmailAccount) {
+  return account === "alerts" ? process.env.GOOGLE_REFRESH_TOKEN_ALERTS : process.env.GOOGLE_REFRESH_TOKEN;
 }
 
-export async function getAccessToken(): Promise<string> {
-  if (!gmailConfigured()) throw new GmailAuthError("Gmail is not connected — run: node scripts/gmail-login.mjs");
+export function gmailConfigured(account: GmailAccount = "main"): boolean {
+  return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && refreshToken(account));
+}
+
+export async function getAccessToken(account: GmailAccount = "main"): Promise<string> {
+  if (!gmailConfigured(account)) {
+    throw new GmailAuthError(
+      account === "alerts"
+        ? "Alerts inbox is not connected — run: node scripts/gmail-login.mjs --alerts"
+        : "Gmail is not connected — run: node scripts/gmail-login.mjs"
+    );
+  }
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       client_id: process.env.GOOGLE_CLIENT_ID!,
       client_secret: process.env.GOOGLE_CLIENT_SECRET!,
-      refresh_token: process.env.GOOGLE_REFRESH_TOKEN!,
+      refresh_token: refreshToken(account)!,
       grant_type: "refresh_token",
     }),
   });
@@ -33,7 +46,7 @@ export async function getAccessToken(): Promise<string> {
   if (!res.ok || !json.access_token) {
     const why = `${json.error ?? res.status}${json.error_description ? `: ${json.error_description}` : ""}`;
     if (json.error === "invalid_grant") {
-      throw new GmailAuthError(`Gmail sign-in expired or was revoked (${why}) — run: node scripts/gmail-login.mjs`);
+      throw new GmailAuthError(`Gmail sign-in expired or was revoked (${why}) — run: node scripts/gmail-login.mjs${account === "alerts" ? " --alerts" : ""}`);
     }
     throw new Error(`Gmail token error (${why})`);
   }
@@ -92,25 +105,53 @@ export type SendInput = {
   threadId?: string;
   inReplyTo?: string; // RFC Message-ID of the message we answer
   references?: string[];
+  attachments?: { filename: string; mimeType: string; data: Uint8Array }[];
+  unsubscribeHeader?: boolean; // default true (outreach); false for job applications
 };
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
 
 export async function sendEmail(input: SendInput): Promise<{ id: string; threadId: string; messageId: string | null }> {
   const from = process.env.GMAIL_ADDRESS;
   if (!from) throw new GmailAuthError("GMAIL_ADDRESS is not set — run: node scripts/gmail-login.mjs");
   if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(input.to)) throw new Error(`Not a valid email address: ${input.to}`);
 
-  const headers = [
+  const common = [
     `From: ${encodeHeader(input.fromName ?? "TechVersa")} <${from}>`,
     `To: ${input.to}`,
     `Subject: ${encodeHeader(input.subject)}`,
     "MIME-Version: 1.0",
-    "Content-Type: text/plain; charset=UTF-8",
-    "Content-Transfer-Encoding: base64",
-    `List-Unsubscribe: <mailto:${from}?subject=unsubscribe>`,
+    ...(input.unsubscribeHeader === false ? [] : [`List-Unsubscribe: <mailto:${from}?subject=unsubscribe>`]),
     ...(input.inReplyTo ? [`In-Reply-To: ${input.inReplyTo}`] : []),
     ...(input.references?.length ? [`References: ${input.references.join(" ")}`] : []),
   ];
-  const mime = `${headers.join("\r\n")}\r\n\r\n${wrap76(utf8ToBase64(input.body.replace(/\r?\n/g, "\r\n")))}`;
+  const textPart = wrap76(utf8ToBase64(input.body.replace(/\r?\n/g, "\r\n")));
+  let mime: string;
+  if (!input.attachments?.length) {
+    mime = [...common, "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", textPart].join("\r\n");
+  } else {
+    // multipart/mixed: the message text + each file (CV, cover letter)
+    const boundary = `cc_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+    const parts = [
+      [`--${boundary}`, "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", textPart].join("\r\n"),
+      ...input.attachments.map((a) =>
+        [
+          `--${boundary}`,
+          `Content-Type: ${a.mimeType}; name="${a.filename.replace(/"/g, "")}"`,
+          `Content-Disposition: attachment; filename="${a.filename.replace(/"/g, "")}"`,
+          "Content-Transfer-Encoding: base64",
+          "",
+          wrap76(bytesToBase64(a.data)),
+        ].join("\r\n")
+      ),
+      `--${boundary}--`,
+    ];
+    mime = [...common, `Content-Type: multipart/mixed; boundary="${boundary}"`, "", parts.join("\r\n")].join("\r\n");
+  }
 
   const token = await getAccessToken();
   const sent = await gmailFetch<{ id: string; threadId: string }>(token, "/messages/send", {
@@ -147,6 +188,7 @@ export type MailMessage = {
   date: number;
   snippet: string;
   body: string;
+  html: string | null; // raw HTML part when there is one (job-alert parsing needs the links)
 };
 
 type Part = { mimeType?: string; body?: { data?: string }; parts?: Part[]; headers?: { name: string; value: string }[] };
@@ -207,7 +249,7 @@ export async function getMessage(token: string, id: string): Promise<MailMessage
   const fromEmail = (emailMatch?.[1] ?? from).trim().toLowerCase();
   const fromName = from.replace(/<[^>]+>/, "").replace(/"/g, "").trim() || fromEmail;
   const plain = findText(m.payload, "text/plain");
-  const html = plain ? null : findText(m.payload, "text/html");
+  const html = findText(m.payload, "text/html");
   const body = (plain ?? (html ? htmlToText(html) : m.snippet ?? "")).slice(0, 20000);
   return {
     id: m.id,
@@ -222,6 +264,7 @@ export async function getMessage(token: string, id: string): Promise<MailMessage
     date: Number(m.internalDate ?? Date.now()),
     snippet: m.snippet ?? "",
     body,
+    html: html ? html.slice(0, 300000) : null,
   };
 }
 

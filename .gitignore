@@ -20,3 +20,4 @@ dist/
 .vscode/
 dashboard/convex/resumes.ts
 dashboard/convex/resumes.ts
+dashboard/convex/cvProfile.ts

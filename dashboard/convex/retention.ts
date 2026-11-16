@@ -124,6 +124,14 @@ export const deleteArchivedJobs = internalMutation({
         .withIndex("by_job", (q) => q.eq("jobId", j._id))
         .first();
       if (detail) await ctx.db.delete(detail._id);
+      const files = await ctx.db
+        .query("cvFiles")
+        .withIndex("by_job", (q) => q.eq("jobId", j._id))
+        .take(20);
+      for (const f of files) {
+        await ctx.storage.delete(f.storageId);
+        await ctx.db.delete(f._id);
+      }
       await ctx.db.delete(j._id);
       done++;
     }
