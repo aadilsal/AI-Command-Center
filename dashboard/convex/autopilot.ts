@@ -307,6 +307,16 @@ export async function proposeAction(ctx: MutationCtx, a: ProposeArgs): Promise<"
     .take(200);
   const used = todays.filter((x) => ["queued", "running", "done", "pending"].includes(x.status)).length;
   if (used >= policy.dailyCap && !a.forceApproval) return "skipped";
+  // Cold emails: don't build a backlog bigger than one day's sending
+  if (COLD_KINDS.has(a.kind)) {
+    const waiting = (
+      await ctx.db
+        .query("autopilotActions")
+        .withIndex("by_status", (q) => q.eq("status", "queued"))
+        .take(200)
+    ).filter((x) => x.kind === a.kind).length;
+    if (waiting >= policy.dailyCap) return "skipped";
+  }
 
   // Paused: nothing runs by itself, but things that need you still show up for approval
   const status = policy.mode === "auto" && !a.forceApproval && !paused ? "queued" : "pending";
@@ -643,6 +653,29 @@ async function execute(ctx: any, a: Doc<"autopilotActions">): Promise<string> {
   }
 }
 
+// Cold emails actually SENT today per kind. The daily limit is enforced here, at sending
+// time, so a backlog of approvals spreads over several days instead of going out at once.
+async function coldSentToday(ctx: { db: any }): Promise<Record<string, number>> {
+  const today = startOfTodayPKT(Date.now());
+  const done: Doc<"autopilotActions">[] = await ctx.db
+    .query("autopilotActions")
+    .withIndex("by_status", (q: any) => q.eq("status", "done"))
+    .order("desc")
+    .take(300);
+  const out: Record<string, number> = {};
+  for (const a of done) {
+    if (COLD_KINDS.has(a.kind) && (a.finishedAt ?? 0) >= today) out[a.kind] = (out[a.kind] ?? 0) + 1;
+  }
+  return out;
+}
+
+async function coldCapReached(ctx: { db: any }, kind: string): Promise<boolean> {
+  const { policies } = await getSettings(ctx);
+  const cap = policies.find((p) => p.key === kind)?.dailyCap ?? 15;
+  const sent = await coldSentToday(ctx);
+  return (sent[kind] ?? 0) >= cap;
+}
+
 export const claimNext = internalMutation({
   args: { allowCold: v.optional(v.boolean()), allowReplies: v.optional(v.boolean()) },
   handler: async (ctx, { allowCold, allowReplies }) => {
@@ -651,9 +684,11 @@ export const claimNext = internalMutation({
       .withIndex("by_status", (q) => q.eq("status", "queued"))
       .order("asc")
       .take(100);
-    // Cold emails wait for the sending window; one email per run; everything else any time
+    const capped = new Set<string>();
+    for (const k of COLD_KINDS) if (await coldCapReached(ctx, k)) capped.add(k);
+    // Cold emails wait for the sending window and the daily limit; one email per run; everything else any time
     const next = queued.find((a) =>
-      COLD_KINDS.has(a.kind) ? !!allowCold : SEND_KINDS.has(a.kind) ? !!allowReplies : true
+      COLD_KINDS.has(a.kind) ? !!allowCold && !capped.has(a.kind) : SEND_KINDS.has(a.kind) ? !!allowReplies : true
     );
     if (!next) return null;
     await ctx.db.patch(next._id, { status: "running", startedAt: Date.now() });
@@ -679,7 +714,13 @@ export const hasQueued = internalQuery({
       .query("autopilotActions")
       .withIndex("by_status", (q) => q.eq("status", "queued"))
       .take(100);
-    return { any: queued.length > 0, nonSend: queued.some((a) => !COLD_KINDS.has(a.kind)) };
+    // Cold emails over today's limit wait for tomorrow — don't keep waking up for them
+    const capped = new Set<string>();
+    for (const k of COLD_KINDS) if (await coldCapReached(ctx, k)) capped.add(k);
+    return {
+      any: queued.some((a) => !capped.has(a.kind)),
+      nonSend: queued.some((a) => !COLD_KINDS.has(a.kind)),
+    };
   },
 });
 
